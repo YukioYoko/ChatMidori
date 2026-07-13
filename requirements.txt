@@ -6,3 +6,9 @@ anthropic
 google-auth-oauthlib
 google-auth-httplib2
 google-api-python-client
+
+# tzdata: en Linux/macOS el sistema operativo ya trae la base de datos de
+# zonas horarias, pero Windows no. Sin este paquete, zoneinfo.ZoneInfo()
+# truena con "No time zone found" al usar "America/Mexico_City". No hace
+# daño instalarlo también en Linux/macOS (simplemente no se usa ahí).
+tzdata
