@@ -22,6 +22,13 @@ agregando al final: /webhook/whatsapp
 import logging
 import os
 
+# Carga las variables de entorno desde ".env" ANTES de importar cualquier
+# otro módulo del proyecto. Es importante que esto vaya primero: tanto
+# whatsapp_client.py como nlu_service.py leen sus credenciales de
+# os.environ en el momento en que se importan, no cuando se usan.
+from dotenv import load_dotenv
+load_dotenv()
+
 from fastapi import FastAPI, Request, Response
 from fastapi.responses import PlainTextResponse
 from twilio.twiml.messaging_response import MessagingResponse

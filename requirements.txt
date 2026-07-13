@@ -6,6 +6,7 @@ anthropic
 google-auth-oauthlib
 google-auth-httplib2
 google-api-python-client
+python-dotenv
 
 # tzdata: en Linux/macOS el sistema operativo ya trae la base de datos de
 # zonas horarias, pero Windows no. Sin este paquete, zoneinfo.ZoneInfo()

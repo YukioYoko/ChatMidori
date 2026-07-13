@@ -64,15 +64,49 @@ pip install -r requirements.txt
 uvicorn main:app --reload --port 8000
 ```
 
-Expón el puerto con [ngrok](https://ngrok.com) para que Twilio pueda llegar a tu máquina:
+Expón el puerto con un túnel para que Twilio pueda llegar a tu máquina. Puedes
+usar [ngrok](https://ngrok.com) o [Cloudflare Tunnel](https://github.com/cloudflare/cloudflared/releases/latest)
+(este último no requiere cuenta para pruebas rápidas):
 
 ```bash
-ngrok http 8000
+cloudflared tunnel --url http://localhost:8000
 ```
 
-Copia la URL https que te da ngrok y configúrala en el Console de Twilio:
+Copia la URL https que te da el túnel y configúrala en el Console de Twilio:
 **Messaging → Try it out → Sandbox settings → "WHEN A MESSAGE COMES IN"**,
-agregando `/webhook/whatsapp` al final (ej. `https://abcd1234.ngrok-free.app/webhook/whatsapp`).
+agregando `/webhook/whatsapp` al final (ej. `https://abcd1234.trycloudflare.com/webhook/whatsapp`).
+
+## Probar el bot de punta a punta (checklist)
+
+1. **Variables de entorno**: copia `.env.example` a `.env` y llena tus
+   credenciales reales. `main.py` las carga automáticamente al arrancar
+   (vía `python-dotenv`) — no necesitas exportarlas manualmente en cada
+   terminal nueva.
+2. **Google Calendar**: coloca tu `credentials.json` en la raíz del
+   proyecto y corre una vez `python calendar_service.py` directamente.
+   Se abrirá tu navegador para autorizar el acceso y se generará
+   `token.json` automáticamente.
+3. **Arranca el servidor**: `uvicorn main:app --reload --port 8000`.
+   Deberías ver el log `Application startup complete` sin errores.
+4. **Levanta el túnel**: `cloudflared tunnel --url http://localhost:8000`
+   (o `ngrok http 8000`). Copia la URL https que te da.
+5. **Configura el webhook en Twilio** con esa URL + `/webhook/whatsapp`
+   (ver arriba).
+6. **Únete al sandbox**: desde tu celular, mándale al número del sandbox
+   de Twilio el código "join palabra-clave" que te dio el Console.
+7. **Manda un mensaje de prueba**: "hola" debería responder con el
+   saludo; "quiero una cita mañana en la tarde" debería mostrarte
+   horarios disponibles.
+8. **Revisa la terminal** donde corre uvicorn — ahí verás los logs de
+   cada mensaje entrante y cualquier error si algo falla.
+9. **Confirma en Google Calendar** que la cita se creó correctamente
+   después de elegir un horario.
+
+> **Nota:** si usas un túnel gratuito (cloudflared sin cuenta, o el
+> sandbox de ngrok), la URL cambia cada vez que lo reinicias — tendrás
+> que actualizar el webhook en Twilio cada vez. Para una URL fija sin
+> este problema, considera desplegar el bot en un hosting como Render
+> o Railway más adelante.
 
 ## Estado del proyecto
 
