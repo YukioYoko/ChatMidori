@@ -146,38 +146,53 @@ def get_busy_events(target_date: date) -> list[dict]:
     busy_list = []
 
     for event in events:
-        start_raw = event.get("start", {})
-        end_raw = event.get("end", {})
-
-        # Los eventos de "todo el día" usan la clave "date" en vez de
-        # "dateTime". Los tratamos como si ocuparan todo el horario laboral.
-        start_str = start_raw.get("dateTime") or start_raw.get("date")
-        end_str = end_raw.get("dateTime") or end_raw.get("date")
-
-        if not start_str or not end_str:
-            continue
-
-        try:
-            if "T" in start_str:
-                start_dt = datetime.fromisoformat(start_str)
-            else:
-                start_dt = datetime.fromisoformat(start_str).replace(tzinfo=TIMEZONE)
-
-            if "T" in end_str:
-                end_dt = datetime.fromisoformat(end_str)
-            else:
-                end_dt = datetime.fromisoformat(end_str).replace(tzinfo=TIMEZONE)
-        except ValueError as exc:
-            logger.warning("No se pudo parsear un evento (%s), se ignora: %s", event.get("id"), exc)
-            continue
-
-        busy_list.append({
-            "start": start_dt.astimezone(TIMEZONE),
-            "end": end_dt.astimezone(TIMEZONE),
-            "summary": event.get("summary", ""),
-        })
+        parsed = _parse_event(event)
+        if parsed is not None:
+            busy_list.append(parsed)
 
     return busy_list
+
+
+def _parse_event(event: dict) -> dict | None:
+    """
+    Convierte un evento crudo de la API de Google Calendar al formato
+    simple que usa el resto del sistema: {id, start, end, summary}.
+
+    Devuelve None si el evento viene con datos incompletos o mal
+    formados, en vez de lanzar una excepción (así un solo evento corrupto
+    no tumba una lista completa de resultados).
+    """
+    start_raw = event.get("start", {})
+    end_raw = event.get("end", {})
+
+    # Los eventos de "todo el día" usan la clave "date" en vez de
+    # "dateTime". Los tratamos como si ocuparan todo el horario laboral.
+    start_str = start_raw.get("dateTime") or start_raw.get("date")
+    end_str = end_raw.get("dateTime") or end_raw.get("date")
+
+    if not start_str or not end_str:
+        return None
+
+    try:
+        if "T" in start_str:
+            start_dt = datetime.fromisoformat(start_str)
+        else:
+            start_dt = datetime.fromisoformat(start_str).replace(tzinfo=TIMEZONE)
+
+        if "T" in end_str:
+            end_dt = datetime.fromisoformat(end_str)
+        else:
+            end_dt = datetime.fromisoformat(end_str).replace(tzinfo=TIMEZONE)
+    except ValueError as exc:
+        logger.warning("No se pudo parsear un evento (%s), se ignora: %s", event.get("id"), exc)
+        return None
+
+    return {
+        "id": event.get("id"),
+        "start": start_dt.astimezone(TIMEZONE),
+        "end": end_dt.astimezone(TIMEZONE),
+        "summary": event.get("summary", ""),
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -226,6 +241,135 @@ def create_appointment(target_date: date, start_time_str: str, client_name: str,
 
     logger.info("Cita creada correctamente: %s", created_event.get("htmlLink"))
     return created_event
+
+
+# ---------------------------------------------------------------------------
+# BÚSQUEDA DE CITAS DE UN CLIENTE (para cancelar / reprogramar)
+# ---------------------------------------------------------------------------
+
+def find_appointments_by_phone(phone_number: str, max_results: int = 5) -> list[dict]:
+    """
+    Busca las citas futuras de un cliente localizando su número de
+    teléfono dentro de la descripción del evento (guardado ahí mismo por
+    create_appointment).
+
+    Nota: esto depende de que el número de teléfono coincida tal cual
+    como Twilio lo manda en cada mensaje. Si el mismo cliente escribiera
+    algún día desde un número distinto, esta búsqueda no encontraría sus
+    citas anteriores — limitación aceptable para un MVP.
+
+    Args:
+        phone_number: número del cliente, ej. "+521234567890".
+        max_results: máximo de citas futuras a devolver.
+
+    Returns:
+        Lista de dicts {id, start, end, summary}, ordenada por fecha
+        ascendente (la más próxima primero). Lista vacía si no hay citas
+        o si ocurre un error controlado.
+    """
+    now = datetime.now(TIMEZONE)
+
+    try:
+        service = _get_service()
+        response = (
+            service.events()
+            .list(
+                calendarId=CALENDAR_ID,
+                timeMin=now.isoformat(),
+                q=phone_number,
+                singleEvents=True,
+                orderBy="startTime",
+                maxResults=max_results,
+            )
+            .execute()
+        )
+    except HttpError as error:
+        logger.error("Error de la API de Google Calendar al buscar citas de %s: %s", phone_number, error)
+        raise
+
+    events = response.get("items", [])
+    citas = []
+    for event in events:
+        parsed = _parse_event(event)
+        # Filtro extra de seguridad: nos aseguramos de que el teléfono
+        # realmente esté en la descripción, ya que "q" hace búsqueda de
+        # texto libre y podría traer coincidencias parciales o de otros
+        # campos del evento.
+        if parsed is not None and phone_number in (event.get("description") or ""):
+            citas.append(parsed)
+
+    return citas
+
+
+# ---------------------------------------------------------------------------
+# REPROGRAMACIÓN Y CANCELACIÓN
+# ---------------------------------------------------------------------------
+
+def update_appointment(event_id: str, new_date: date, new_start_time_str: str) -> dict:
+    """
+    Mueve una cita existente a una nueva fecha/hora (reprogramación).
+    Conserva la duración de 1 hora y el resto de los datos del evento
+    (nombre del cliente, teléfono en la descripción, etc.).
+
+    Args:
+        event_id: ID del evento en Google Calendar a mover.
+        new_date: nueva fecha de la cita.
+        new_start_time_str: nueva hora de inicio "HH:MM".
+
+    Returns:
+        dict del evento actualizado.
+
+    Raises:
+        HttpError: si Google Calendar rechaza la solicitud (ej. el
+                   evento ya no existe porque fue borrado manualmente).
+        ValueError: si new_start_time_str no tiene un formato válido.
+    """
+    try:
+        hour, minute = map(int, new_start_time_str.split(":"))
+    except (ValueError, AttributeError) as exc:
+        raise ValueError(f"Formato de hora inválido: '{new_start_time_str}' (se esperaba 'HH:MM')") from exc
+
+    new_start_dt = datetime(new_date.year, new_date.month, new_date.day, hour, minute, tzinfo=TIMEZONE)
+    new_end_dt = new_start_dt + timedelta(hours=1)
+
+    body = {
+        "start": {"dateTime": new_start_dt.isoformat(), "timeZone": TIMEZONE_NAME},
+        "end": {"dateTime": new_end_dt.isoformat(), "timeZone": TIMEZONE_NAME},
+    }
+
+    try:
+        service = _get_service()
+        updated_event = service.events().patch(calendarId=CALENDAR_ID, eventId=event_id, body=body).execute()
+    except HttpError as error:
+        logger.error("Error de la API de Google Calendar al reprogramar el evento %s: %s", event_id, error)
+        raise
+
+    logger.info("Cita %s reprogramada correctamente a %s", event_id, new_start_dt.isoformat())
+    return updated_event
+
+
+def delete_appointment(event_id: str) -> None:
+    """
+    Cancela (borra) una cita existente en Google Calendar.
+
+    Args:
+        event_id: ID del evento a borrar.
+
+    Raises:
+        HttpError: si Google Calendar rechaza la solicitud. Un 404/410
+                   (el evento ya no existe) también se propaga para que
+                   conversation_manager.py pueda decidir cómo avisarle
+                   al cliente en vez de asumir silenciosamente que se
+                   canceló.
+    """
+    try:
+        service = _get_service()
+        service.events().delete(calendarId=CALENDAR_ID, eventId=event_id).execute()
+    except HttpError as error:
+        logger.error("Error de la API de Google Calendar al cancelar el evento %s: %s", event_id, error)
+        raise
+
+    logger.info("Cita %s cancelada correctamente", event_id)
 
 
 # ---------------------------------------------------------------------------

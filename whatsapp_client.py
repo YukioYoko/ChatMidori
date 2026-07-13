@@ -153,6 +153,48 @@ def build_confirmation_message(fecha_legible: str, hora: str, nombre_cliente: st
     )
 
 
+def build_no_appointments_message() -> str:
+    """Cuando el cliente pide cancelar/reprogramar pero no tiene citas registradas."""
+    return (
+        "No encontré ninguna cita activa a tu nombre con este número. 🤔\n"
+        "Si crees que es un error, contáctanos directamente."
+    )
+
+
+def build_appointment_selection_message(citas_legibles: list[str]) -> str:
+    """
+    Lista numerada de citas cuando el cliente tiene más de una y hay que
+    preguntarle cuál quiere cancelar o reprogramar.
+
+    Args:
+        citas_legibles: lista de strings ya formateados, ej.
+                         ["viernes 18 de julio a las 10:15", ...]
+    """
+    lineas = [f"  {i + 1}. {cita}" for i, cita in enumerate(citas_legibles)]
+    return "Tienes varias citas registradas:\n\n" + "\n".join(lineas) + "\n\n¿Cuál te refieres? (dime el número)"
+
+
+def build_cancel_confirm_prompt(cita_legible: str) -> str:
+    """Pide confirmación antes de cancelar definitivamente una cita."""
+    return f"Tienes una cita el {cita_legible}. ¿Confirmas que quieres cancelarla? (sí/no)"
+
+
+def build_cancel_success_message() -> str:
+    return "✅ Tu cita fue cancelada correctamente. Si quieres agendar otra, aquí estoy."
+
+
+def build_cancel_aborted_message() -> str:
+    return "Entendido, tu cita se mantiene sin cambios. 🙂"
+
+
+def build_reschedule_prompt(cita_legible: str) -> str:
+    """Pide la nueva fecha/hora una vez identificada la cita a reprogramar."""
+    return (
+        f"Tu cita actual es el {cita_legible}. "
+        "¿Para qué nuevo día y hora te gustaría moverla?"
+    )
+
+
 def build_error_message() -> str:
     """Mensaje genérico y amable cuando algo falla internamente."""
     return (
