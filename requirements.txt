@@ -1,0 +1,8 @@
+fastapi
+uvicorn[standard]
+python-multipart
+twilio
+anthropic
+google-auth-oauthlib
+google-auth-httplib2
+google-api-python-client
