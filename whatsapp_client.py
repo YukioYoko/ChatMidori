@@ -189,6 +189,19 @@ def build_reschedule_prompt(cita_legible: str) -> str:
     )
 
 
+def build_ask_confirm_appointment_message(fecha_legible: str, hora: str) -> str:
+    """
+    Confirmación intermedia: después de que el paciente elige fecha y
+    hora, le pedimos que confirme antes de pasar a nombre/motivo. Así
+    evitamos que un tap accidental o una mala elección llegue hasta el
+    final del flujo.
+    """
+    return (
+        f"Perfecto, la cita quedaría el {fecha_legible} a las {hora}. 📅\n\n"
+        "¿Es correcto? (responde \"sí\" o \"no\")"
+    )
+
+
 def build_ask_name_message(fecha_legible: str, hora: str) -> str:
     """Después de que el cliente elige un horario, le pedimos su nombre."""
     return (

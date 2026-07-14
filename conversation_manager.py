@@ -41,19 +41,14 @@ logger = logging.getLogger("conversation_manager")
 #   "stage": uno de:
 #       "inicio"
 #       "esperando_seleccion_horario"              (agendando cita nueva)
+#       "esperando_confirmacion_horario"           (agendando: confirmar fecha+hora)
 #       "esperando_nombre"                          (agendando: pedir nombre)
 #       "esperando_descripcion"                     (agendando: pedir motivo)
 #       "esperando_seleccion_cita"                  (cancelar/reprogramar: elegir cuál)
 #       "esperando_confirmacion_cancelacion"        (cancelar: confirmar sí/no)
 #       "esperando_nueva_fecha_reprogramacion"      (reprogramar: pedir nueva fecha)
 #       "esperando_seleccion_horario_reprogramacion" (reprogramar: elegir nuevo horario)
-#   "fecha": date | None,
-#   "slots_ofrecidos": list[str],
-#   "hora_pendiente": str | None,       # hora ya elegida, esperando nombre/descripción
-#   "nombre_cliente": str | None,
-#   "descripcion_cita": str | None,
-#   "citas_encontradas": list[dict],    # candidatas al buscar por teléfono
-#   "evento_objetivo": dict | None,     # la cita puntual sobre la que se actúa
+#   ...
 # }
 CONVERSATIONS: dict[str, dict] = {}
 
@@ -372,7 +367,23 @@ def _avanzar_con_cita_elegida(state: dict, cita: dict, accion: str) -> str:
 # INTERPRETACIÓN CON CLAUDE Y DESPACHO DE INTENCIÓN
 # ---------------------------------------------------------------------------
 
-def _procesar_solicitud_de_fecha(phone_number: str, state: dict, fecha_str: str | None) -> str:
+def _es_primera_interaccion(state: dict) -> bool:
+    """
+    Detecta si esta es la primera vez que el paciente habla con el bot
+    (no ha habido intercambios previos que dejaran datos en el estado).
+    Se usa para anteponer el saludo cordial cuando llega directo pidiendo
+    algo, sin haber saludado antes.
+    """
+    return (
+        state.get("stage") == "inicio"
+        and state.get("fecha") is None
+        and state.get("nombre_cliente") is None
+        and not state.get("citas_encontradas")
+    )
+
+
+def _procesar_solicitud_de_fecha(phone_number: str, state: dict, fecha_str: str | None,
+                                   es_primera_interaccion: bool = False) -> str:
     """
     Lógica compartida para "agendar_cita" y "consultar_disponibilidad":
     si ya tenemos una fecha, calculamos y mostramos los horarios
@@ -390,10 +401,17 @@ def _procesar_solicitud_de_fecha(phone_number: str, state: dict, fecha_str: str 
             # Reutilizamos la fecha que ya estaba en la conversación.
             fecha_str = fecha_previa.isoformat()
         else:
-            return (
-                "Claro, ¿para qué día te gustaría la cita? Solo dime el día y el "
-                "mes para no confundirnos (ej. \"el 15 de julio\" o \"el próximo miércoles\")."
+            pregunta_fecha = (
+                "¿Para qué día te gustaría la cita? Solo dime el día y el "
+                "mes para no confundirnos (ej. \"el 15 de julio\" o \"el "
+                "próximo miércoles\")."
             )
+            if es_primera_interaccion:
+                # Le anteponemos el agradecimiento para que la respuesta
+                # se sienta cordial, aun cuando el paciente entró directo
+                # pidiendo algo sin saludar antes.
+                return f"{business_config.agradecimiento_al_pedir()} Con gusto te ayudo.\n\n{pregunta_fecha}"
+            return f"Claro, {pregunta_fecha[0].lower() + pregunta_fecha[1:]}"
 
     try:
         fecha = date.fromisoformat(fecha_str)
@@ -419,7 +437,8 @@ def _procesar_solicitud_de_fecha(phone_number: str, state: dict, fecha_str: str 
     return whatsapp_client.build_available_slots_message(fecha_legible, slots)
 
 
-def _despachar_intencion(phone_number: str, state: dict, resultado_nlu: dict, profile_name: str | None) -> str:
+def _despachar_intencion(phone_number: str, state: dict, resultado_nlu: dict, profile_name: str | None,
+                          es_primera_interaccion: bool = False) -> str:
     """
     Dado el resultado ya extraído por Claude, decide qué hacer. Se separa
     de la llamada a la API para poder reutilizarse tanto en una
@@ -432,13 +451,14 @@ def _despachar_intencion(phone_number: str, state: dict, resultado_nlu: dict, pr
     if resultado_nlu.get("nombre_cliente"):
         state["nombre_cliente"] = resultado_nlu["nombre_cliente"]
 
-    nombre_para_saludo = state["nombre_cliente"] or profile_name
-
     if intencion == "saludo":
-        return whatsapp_client.build_greeting_message(nombre_para_saludo)
+        return whatsapp_client.build_greeting_message()
 
     if intencion in ("agendar_cita", "consultar_disponibilidad"):
-        return _procesar_solicitud_de_fecha(phone_number, state, resultado_nlu.get("fecha"))
+        return _procesar_solicitud_de_fecha(
+            phone_number, state, resultado_nlu.get("fecha"),
+            es_primera_interaccion=es_primera_interaccion,
+        )
 
     if intencion == "cancelar_cita":
         return _iniciar_busqueda_de_cita(phone_number, state, accion="cancelar")
@@ -513,17 +533,46 @@ def handle_incoming_message(phone_number: str, message_body: str, profile_name: 
         if stage == "esperando_seleccion_horario":
             hora_elegida = _match_slot_selection(message_body, state["slots_ofrecidos"])
             if hora_elegida:
-                # No creamos la cita todavía: primero pedimos nombre y motivo.
-                state["stage"] = "esperando_nombre"
+                # No creamos la cita todavía: primero pedimos confirmación
+                # de la fecha y hora elegida, y solo después pediremos
+                # nombre y motivo.
+                state["stage"] = "esperando_confirmacion_horario"
                 state["hora_pendiente"] = hora_elegida
                 fecha_legible = _format_fecha_legible(state["fecha"])
-                return whatsapp_client.build_ask_name_message(fecha_legible, hora_elegida)
+                return whatsapp_client.build_ask_confirm_appointment_message(fecha_legible, hora_elegida)
 
             mensaje_aclaracion = (
                 "No logré identificar el horario. ¿Podrías decirme el número "
                 "de la lista o la hora exacta? (ej. \"2\" o \"10:15\")"
             )
             return _fallback_reinterpretar(phone_number, state, message_body, profile_name, mensaje_aclaracion)
+
+        if stage == "esperando_confirmacion_horario":
+            confirmacion = _parse_si_no(message_body)
+
+            if confirmacion is None:
+                mensaje_aclaracion = (
+                    "¿La fecha y hora te parecen bien? Responde \"sí\" para "
+                    "continuar o \"no\" para elegir otro horario."
+                )
+                return _fallback_reinterpretar(phone_number, state, message_body, profile_name, mensaje_aclaracion)
+
+            if confirmacion is False:
+                # El paciente dijo que no: le mostramos la lista de nuevo
+                # (los slots siguen en memoria) para que elija otro.
+                state["stage"] = "esperando_seleccion_horario"
+                state["hora_pendiente"] = None
+                fecha_legible = _format_fecha_legible(state["fecha"])
+                return (
+                    "Entendido, aquí están de nuevo los horarios disponibles. "
+                    "Dime cuál prefieres.\n\n"
+                    + whatsapp_client.build_available_slots_message(fecha_legible, state["slots_ofrecidos"])
+                )
+
+            # Confirmó: avanzamos a pedir el nombre.
+            state["stage"] = "esperando_nombre"
+            fecha_legible = _format_fecha_legible(state["fecha"])
+            return whatsapp_client.build_ask_name_message(fecha_legible, state["hora_pendiente"])
 
         if stage == "esperando_nombre":
             # El nombre puede venir con o sin frase alrededor ("soy Ana",
@@ -663,8 +712,12 @@ def handle_incoming_message(phone_number: str, message_body: str, profile_name: 
         # algo fuera de flujo. Usamos Claude (Haiku) para entender la
         # intención.
         # -------------------------------------------------------------
+        primera = _es_primera_interaccion(state)
         resultado_nlu = nlu_service.extract_intent(message_body)
-        return _despachar_intencion(phone_number, state, resultado_nlu, profile_name)
+        return _despachar_intencion(
+            phone_number, state, resultado_nlu, profile_name,
+            es_primera_interaccion=primera,
+        )
 
     except Exception as exc:
         logger.error("Error inesperado procesando mensaje de %s: %s", phone_number, exc)

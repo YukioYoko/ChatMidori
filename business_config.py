@@ -112,13 +112,27 @@ Contexto del consultorio:
 # ---------------------------------------------------------------------------
 
 def saludo_bienvenida(nombre_cliente: str | None = None) -> str:
-    """Mensaje de bienvenida cuando el cliente saluda por primera vez."""
-    saludo = f"¡Hola{', ' + nombre_cliente if nombre_cliente else ''}! 👋"
+    """
+    Mensaje de bienvenida cuando el paciente saluda por primera vez.
+
+    Nota: por decisión del negocio, no personalizamos con el nombre del
+    paciente en el saludo — queda un saludo genérico y cordial. El
+    parámetro se conserva por compatibilidad futura.
+    """
     return (
-        f"{saludo} Gracias por comunicarte con el consultorio de la {DOCTOR_NAME}.\n\n"
+        f"¡Hola! 👋 Gracias por comunicarte con el consultorio de la {DOCTOR_NAME}.\n\n"
         "Soy su asistente virtual y con gusto te ayudo a agendar, "
         "cancelar o reprogramar tu cita. ¿En qué te puedo ayudar hoy?"
     )
+
+
+def agradecimiento_al_pedir() -> str:
+    """
+    Frase inicial cuando el paciente llega directo pidiendo algo (sin
+    saludar antes). Sirve para que la respuesta se sienta cálida en
+    lugar de directa al grano.
+    """
+    return f"¡Gracias por comunicarte con el consultorio de la {DOCTOR_NAME}!"
 
 
 def despedida_confirmacion() -> str:
