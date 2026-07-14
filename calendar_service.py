@@ -13,6 +13,7 @@ Solo habla con Google y devuelve datos "crudos" ya convertidos a datetime.
 """
 
 import os
+import re
 import logging
 from datetime import date, datetime, timedelta
 from zoneinfo import ZoneInfo
@@ -231,7 +232,52 @@ def _parse_event(event: dict) -> dict | None:
         "start": start_dt.astimezone(TIMEZONE),
         "end": end_dt.astimezone(TIMEZONE),
         "summary": event.get("summary", ""),
+        "description": event.get("description", ""),
     }
+
+
+_PATRON_TELEFONO_EN_DESCRIPCION = re.compile(r"WhatsApp:\s*(\+?\d+)")
+
+
+def _extraer_telefono(evento: dict) -> str | None:
+    """Extrae el número de WhatsApp guardado en la descripción del evento."""
+    match = _PATRON_TELEFONO_EN_DESCRIPCION.search(evento.get("description", ""))
+    return match.group(1) if match else None
+
+
+def _extraer_nombre_de_summary(evento: dict) -> str | None:
+    """El summary tiene el formato 'Cita - Nombre del Cliente'."""
+    summary = evento.get("summary", "")
+    if summary.startswith("Cita - "):
+        return summary[len("Cita - "):].strip()
+    return summary or None
+
+
+def get_events_for_date(target_date: date) -> list[dict]:
+    """
+    Devuelve todas las citas agendadas para un día específico, ya
+    enriquecidas con el teléfono y el nombre del paciente extraídos del
+    evento. Se usa para el envío de recordatorios del día anterior.
+
+    Returns:
+        Lista de dicts: [{"id", "start", "end", "summary", "telefono",
+        "nombre"}, ...]. Los eventos sin teléfono detectable (ej. citas
+        creadas manualmente, no por el bot) se excluyen — no hay a quién
+        mandarle el recordatorio.
+    """
+    eventos = get_busy_events(target_date)
+    resultado = []
+    for evento in eventos:
+        telefono = _extraer_telefono(evento)
+        if not telefono:
+            logger.info("Evento '%s' sin teléfono detectable, se omite del recordatorio.", evento.get("summary"))
+            continue
+        resultado.append({
+            **evento,
+            "telefono": telefono,
+            "nombre": _extraer_nombre_de_summary(evento),
+        })
+    return resultado
 
 
 # ---------------------------------------------------------------------------

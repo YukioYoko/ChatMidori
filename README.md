@@ -28,12 +28,38 @@ Twilio (canal WhatsApp) ── webhook POST ──▶ main.py (FastAPI)
 
 | Archivo | Responsabilidad |
 |---|---|
-| `main.py` | Servidor FastAPI, recibe el webhook de Twilio |
+| `main.py` | Servidor FastAPI, recibe el webhook de Twilio, dispara recordatorios |
 | `conversation_manager.py` | Máquina de estados por conversación |
 | `nlu_service.py` | Interpreta lenguaje natural con Claude Haiku 4.5 |
 | `rules_engine.py` | Lógica pura de horarios disponibles |
 | `calendar_service.py` | Lectura/escritura en Google Calendar |
 | `whatsapp_client.py` | Envío/recepción de mensajes vía Twilio |
+| `reminders.py` | Recordatorio automático de cita el día anterior |
+| `business_config.py` | Personalidad, tono y contexto del consultorio |
+
+## Recordatorios automáticos (día anterior)
+
+El bot manda un recordatorio de WhatsApp el día antes de cada cita.
+Como es un mensaje que **el negocio inicia** (no una respuesta al
+paciente), WhatsApp exige una plantilla ("Content Template") aprobada
+por Meta — no se puede mandar como texto libre.
+
+**Configuración (una sola vez):**
+1. Twilio Console → Messaging → Content Template Builder → crea una
+   plantilla categoría **Utility**, en español, con 3 variables (nombre,
+   fecha, hora). El texto sugerido está en `whatsapp_client.py`.
+2. Espera la aprobación de Meta (usualmente minutos a pocas horas).
+3. Copia el Content SID (`HX...`) a la variable de entorno
+   `TWILIO_REMINDER_CONTENT_SID`.
+
+**Cómo se dispara:**
+- Si el bot corre 24/7 (ej. Render Starter): automático, todos los días
+  a la hora que definas en `REMINDER_HOUR` (default 10am).
+- Si usas un plan que se duerme (ej. Render Free): desactiva el
+  scheduler interno (`REMINDER_SCHEDULER_ENABLED=false`) y usa un cron
+  externo gratuito (cron-job.org, Render Cron Jobs) que le pegue una vez
+  al día a `POST /tasks/send-reminders` con el header
+  `X-Reminder-Secret: <tu REMINDER_SECRET>`.
 
 ## Instalación
 

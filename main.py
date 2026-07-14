@@ -29,12 +29,14 @@ import os
 from dotenv import load_dotenv
 load_dotenv()
 
-from fastapi import FastAPI, Request, Response
+from fastapi import FastAPI, Request, Response, Header, HTTPException
 from fastapi.responses import PlainTextResponse
 from twilio.twiml.messaging_response import MessagingResponse
+from apscheduler.schedulers.background import BackgroundScheduler
 
 import whatsapp_client
 import conversation_manager
+import reminders
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 logger = logging.getLogger("main")
@@ -50,11 +52,58 @@ app = FastAPI(title="WhatsApp Appointment Bot")
 # -----------------------------------------------------------------------
 VALIDATE_SIGNATURE = os.environ.get("VALIDATE_TWILIO_SIGNATURE", "false").lower() == "true"
 
+# -----------------------------------------------------------------------
+# RECORDATORIOS AUTOMÁTICOS DEL DÍA ANTERIOR
+#
+# Opción A (default si el bot corre 24/7, ej. Render Starter): un
+# scheduler interno dispara enviar_recordatorios_de_manana() todos los
+# días a la hora configurada.
+#
+# Opción B (recomendada si usas un plan que "duerme", ej. Render Free):
+# desactiva el scheduler interno (REMINDER_SCHEDULER_ENABLED=false) y en
+# su lugar configura un cron externo gratuito (cron-job.org, Render Cron
+# Jobs, etc.) que le pegue una vez al día a:
+#     POST /tasks/send-reminders
+#     Header: X-Reminder-Secret: <tu REMINDER_SECRET>
+# -----------------------------------------------------------------------
+REMINDER_HOUR = int(os.environ.get("REMINDER_HOUR", "10"))  # 10am hora de México
+REMINDER_SCHEDULER_ENABLED = os.environ.get("REMINDER_SCHEDULER_ENABLED", "true").lower() == "true"
+REMINDER_SECRET = os.environ.get("REMINDER_SECRET")
+
+if REMINDER_SCHEDULER_ENABLED:
+    _scheduler = BackgroundScheduler(timezone="America/Mexico_City")
+    _scheduler.add_job(
+        reminders.enviar_recordatorios_de_manana,
+        trigger="cron",
+        hour=REMINDER_HOUR,
+        minute=0,
+        id="recordatorios_diarios",
+    )
+    _scheduler.start()
+    logger.info("Scheduler de recordatorios activo: todos los días a las %02d:00", REMINDER_HOUR)
+
 
 @app.get("/")
 def health_check():
     """Endpoint simple para confirmar que el servidor está vivo."""
     return {"status": "ok", "service": "whatsapp-appointment-bot"}
+
+
+@app.post("/tasks/send-reminders")
+def trigger_reminders(x_reminder_secret: str | None = Header(default=None)):
+    """
+    Dispara manualmente el envío de recordatorios de mañana. Pensado para
+    ser llamado por un cron externo (ver nota arriba) cuando el bot corre
+    en un plan que se duerme y no puede confiar en un scheduler interno.
+
+    Protegido con un secreto simple en el header, para que no cualquiera
+    en internet pueda spammear recordatorios a tus pacientes.
+    """
+    if REMINDER_SECRET and x_reminder_secret != REMINDER_SECRET:
+        raise HTTPException(status_code=403, detail="Secreto inválido")
+
+    resultado = reminders.enviar_recordatorios_de_manana()
+    return resultado
 
 
 @app.post("/webhook/whatsapp")

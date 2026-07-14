@@ -18,6 +18,7 @@ no cambian en absoluto.
 
 import os
 import logging
+import json
 
 from twilio.rest import Client
 from twilio.request_validator import RequestValidator
@@ -52,6 +53,28 @@ logger = logging.getLogger("whatsapp_client")
 TWILIO_ACCOUNT_SID = os.environ.get("TWILIO_ACCOUNT_SID")
 TWILIO_AUTH_TOKEN = os.environ.get("TWILIO_AUTH_TOKEN")
 TWILIO_WHATSAPP_NUMBER = os.environ.get("TWILIO_WHATSAPP_NUMBER")
+
+# -----------------------------------------------------------------------
+# >>> PLANTILLA PARA RECORDATORIOS (mensajes iniciados por el negocio) <<<
+#
+# WhatsApp NO permite mandar mensajes libres fuera de la ventana de 24h
+# que abre el paciente al escribir primero. Para recordatorios (que tú
+# inicias, no el paciente) es obligatorio usar una "Content Template"
+# aprobada por Meta, categoría "Utility".
+#
+# Cómo crearla (una sola vez):
+#   1. Twilio Console -> Messaging -> Content Template Builder -> Create new
+#   2. Categoría: Utility. Idioma: Spanish (Mexico).
+#   3. Cuerpo sugerido (usa {{1}}, {{2}}, {{3}} como variables):
+#        "Hola {{1}}, te recordamos tu cita en el consultorio de la
+#        Dra. Midori Muraoka mañana {{2}} a las {{3}}. Si necesitas
+#        cancelarla o cambiarla, responde a este mensaje."
+#   4. Envíala a aprobación de Meta (usualmente 15 min - unas horas).
+#   5. Copia el Content SID (empieza con "HX...") y ponlo aquí:
+#
+#        export TWILIO_REMINDER_CONTENT_SID="HXxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+# -----------------------------------------------------------------------
+TWILIO_REMINDER_CONTENT_SID = os.environ.get("TWILIO_REMINDER_CONTENT_SID")
 
 _client = Client(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN)
 
@@ -110,6 +133,59 @@ def send_whatsapp_message(to_number: str, body: str) -> bool:
 # contestador automático.
 
 import random
+
+
+def send_appointment_reminder(to_number: str, nombre: str, fecha_legible: str, hora: str) -> bool:
+    """
+    Manda el recordatorio de cita del día anterior, usando la Content
+    Template aprobada por Meta (ver TWILIO_REMINDER_CONTENT_SID arriba).
+
+    A diferencia de send_whatsapp_message(), este NO es una respuesta
+    dentro de una conversación abierta por el paciente — es un mensaje
+    que el negocio inicia, así que WhatsApp exige que sea una plantilla
+    pre-aprobada. No se puede mandar como texto libre.
+
+    Args:
+        to_number: número del paciente (con o sin prefijo "whatsapp:").
+        nombre: nombre del paciente, para personalizar el mensaje.
+        fecha_legible: fecha en formato amigable, ej. "miércoles 15 de julio".
+        hora: hora de la cita, ej. "17:00".
+
+    Returns:
+        True si se envió correctamente, False si falló o si la plantilla
+        no está configurada todavía (se loguea claramente cuál fue el caso).
+    """
+    if not TWILIO_REMINDER_CONTENT_SID:
+        logger.warning(
+            "No se puede mandar el recordatorio a %s: falta configurar "
+            "TWILIO_REMINDER_CONTENT_SID (plantilla de Twilio). Ver "
+            "instrucciones en whatsapp_client.py.",
+            to_number,
+        )
+        return False
+
+    if not to_number.startswith("whatsapp:"):
+        to_number = f"whatsapp:{to_number}"
+
+    try:
+        message = _client.messages.create(
+            from_=TWILIO_WHATSAPP_NUMBER,
+            to=to_number,
+            content_sid=TWILIO_REMINDER_CONTENT_SID,
+            content_variables=json.dumps({
+                "1": nombre or "paciente",
+                "2": fecha_legible,
+                "3": hora,
+            }),
+        )
+        logger.info("Recordatorio enviado a %s (sid=%s)", to_number, message.sid)
+        return True
+    except TwilioRestException as exc:
+        logger.error("Twilio rechazó el recordatorio a %s: %s", to_number, exc)
+        return False
+    except Exception as exc:
+        logger.error("Error inesperado al enviar recordatorio: %s", exc)
+        return False
 
 
 def build_greeting_message(nombre_cliente: str | None = None) -> str:
