@@ -13,3 +13,9 @@ venv/
 .DS_Store
 .vscode/
 .idea/
+
+# Binarios de herramientas externas (no deben vivir en el repo, cada quien
+# los descarga por su cuenta según su sistema operativo)
+cloudflared.exe
+ngrok.exe
+*.exe
