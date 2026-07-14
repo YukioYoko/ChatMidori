@@ -226,7 +226,7 @@ def create_appointment(target_date: date, start_time_str: str, client_name: str,
         raise ValueError(f"Formato de hora inválido: '{start_time_str}' (se esperaba 'HH:MM')") from exc
 
     start_dt = datetime(target_date.year, target_date.month, target_date.day, hour, minute, tzinfo=TIMEZONE)
-    end_dt = start_dt + timedelta(hours=1)
+    end_dt = start_dt + timedelta(minutes=30)
 
     # Armamos la descripción del evento de forma estructurada para que sea
     # legible desde Google Calendar y también parseable si algún día se
@@ -344,7 +344,7 @@ def update_appointment(event_id: str, new_date: date, new_start_time_str: str) -
         raise ValueError(f"Formato de hora inválido: '{new_start_time_str}' (se esperaba 'HH:MM')") from exc
 
     new_start_dt = datetime(new_date.year, new_date.month, new_date.day, hour, minute, tzinfo=TIMEZONE)
-    new_end_dt = new_start_dt + timedelta(hours=1)
+    new_end_dt = new_start_dt + timedelta(minutes=30)
 
     body = {
         "start": {"dateTime": new_start_dt.isoformat(), "timeZone": TIMEZONE_NAME},

@@ -26,29 +26,35 @@ TIMEZONE = ZoneInfo("America/Mexico_City")
 
 # Horario laboral por día de la semana.
 # Python: Monday = 0 ... Sunday = 6
-# Formato: dia_semana -> (hora_apertura, hora_cierre) en formato 24h (int)
+# Formato: dia_semana -> (hora_apertura, minuto_apertura, hora_cierre, minuto_cierre)
+# Basado en el horario del consultorio de la Dra. Midori Muraoka:
+#   Lunes a Viernes: 4:00 PM - 8:00 PM
+#   Sábado:          9:30 AM - 2:00 PM
+#   Domingo:         cerrado
 BUSINESS_HOURS = {
-    0: (9, 18),   # Lunes
-    1: (9, 18),   # Martes
-    2: (9, 18),   # Miércoles
-    3: (9, 18),   # Jueves
-    4: (9, 18),   # Viernes
-    5: (9, 14),   # Sábado
+    0: (16, 0, 20, 0),   # Lunes
+    1: (16, 0, 20, 0),   # Martes
+    2: (16, 0, 20, 0),   # Miércoles
+    3: (16, 0, 20, 0),   # Jueves
+    4: (16, 0, 20, 0),   # Viernes
+    5: (9, 30, 14, 0),   # Sábado
     # 6 (Domingo) no aparece -> cerrado
 }
 
-# Duración fija de cada cita.
-APPOINTMENT_DURATION = timedelta(hours=1)
+# Duración fija de cada cita (30 minutos).
+APPOINTMENT_DURATION = timedelta(minutes=30)
 
 # Espacio obligatorio entre el fin de una cita y el inicio de la siguiente.
-BUFFER_TIME = timedelta(minutes=15)
+# El consultorio no requiere buffer entre citas.
+BUFFER_TIME = timedelta(minutes=0)
 
 # Anticipación mínima para reservar el mismo día.
 MIN_ADVANCE_NOTICE = timedelta(hours=3)
 
 # Granularidad con la que probamos posibles horas de inicio.
-# 15 minutos permite slots como "09:00", "09:15", "09:30", etc.
-SLOT_GRANULARITY = timedelta(minutes=15)
+# Ajustada a 30 min para que los slots caigan en horas y medias horas
+# (16:00, 16:30, 17:00, ...) — congruente con la duración de la cita.
+SLOT_GRANULARITY = timedelta(minutes=30)
 
 # Si el título/summary de un evento de Google Calendar contiene alguna de
 # estas palabras (sin importar mayúsculas/minúsculas), ese rango se
@@ -138,15 +144,15 @@ def generate_available_slots(requested_date: date, busy_events: list[dict]) -> l
     if weekday not in BUSINESS_HOURS:
         return []
 
-    open_hour, close_hour = BUSINESS_HOURS[weekday]
+    open_hour, open_minute, close_hour, close_minute = BUSINESS_HOURS[weekday]
 
     day_start = datetime(
         requested_date.year, requested_date.month, requested_date.day,
-        open_hour, 0, tzinfo=TIMEZONE
+        open_hour, open_minute, tzinfo=TIMEZONE
     )
     day_end = datetime(
         requested_date.year, requested_date.month, requested_date.day,
-        close_hour, 0, tzinfo=TIMEZONE
+        close_hour, close_minute, tzinfo=TIMEZONE
     )
 
     # 2. Intervalos ocupados ya expandidos con buffer.
