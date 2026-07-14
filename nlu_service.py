@@ -94,21 +94,39 @@ Devuelve exactamente estas claves:
 {{
   "intencion": una de ["agendar_cita", "cancelar_cita", "reprogramar_cita", "consultar_disponibilidad", "saludo", "otro"],
   "fecha": fecha en formato "YYYY-MM-DD" si el cliente la mencionó o se puede
-           inferir (ej. "mañana", "el viernes"), o null si no se menciona,
-  "hora_preferida": "mañana", "tarde", "noche", una hora específica en
-           formato "HH:MM", o null si no se menciona,
+           inferir (ej. "mañana", "el viernes", "el 15 de julio"), o null si
+           no se menciona ninguna fecha,
+  "hora_preferida": "mañana", "tarde", "noche", una hora específica SIEMPRE
+           en formato 24h "HH:MM" (convierte "1pm" -> "13:00", "9am" -> "09:00"),
+           o null si no se menciona,
   "nombre_cliente": el nombre del cliente si lo menciona explícitamente,
            o null si no aparece,
   "confianza": "alta", "media" o "baja", según qué tan seguro estás de
            haber entendido correctamente la intención y los datos.
 }}
 
-Reglas importantes:
+Reglas para interpretar la fecha (importante, sé flexible con el lenguaje
+natural del cliente, incluyendo errores de tipeo o acentos faltantes):
+- El cliente puede escribir con errores ("miercoles" sin acento, "d ejulio"
+  con espacio de más, "agosto" mal escrito, etc.) — interpreta la intención
+  real, no exijas ortografía perfecta.
+- Si el cliente menciona día y mes explícitos (ej. "el 15 de julio", "15/07"),
+  usa exactamente ese día y mes. Si no menciona el año, usa el año actual;
+  si esa fecha ya pasó este año, usa el año siguiente.
+- Si el cliente menciona un día de la semana sin fecha exacta (ej. "el
+  viernes", "el próximo lunes"), calcula la fecha real más próxima a partir
+  de hoy que caiga en ese día de la semana.
+- Si el cliente menciona un día de la semana JUNTO con un número de día que
+  no corresponde (ej. dice "miércoles 15" pero el 15 de este mes es jueves),
+  prioriza el número de día explícito sobre el nombre del día de la semana
+  — la gente comete ese error de dedo con frecuencia.
+- Nunca inventes una fecha u hora que el cliente no mencionó ni se pueda
+  inferir razonablemente del texto.
+
+Otras reglas importantes:
 - Si el mensaje es ambiguo o no tiene relación con agendar citas, usa
   intencion: "otro" y confianza: "baja".
 - Si el cliente solo saluda ("hola", "buenas tardes"), usa intencion: "saludo".
-- Nunca inventes una fecha u hora que el cliente no mencionó ni se pueda
-  inferir razonablemente del texto.
 - Responde SOLO con el JSON. Nada de texto antes o después."""
 
 

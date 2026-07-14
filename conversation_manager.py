@@ -209,6 +209,108 @@ def _avanzar_con_cita_elegida(state: dict, cita: dict, accion: str) -> str:
 
 
 # ---------------------------------------------------------------------------
+# INTERPRETACIÓN CON CLAUDE Y DESPACHO DE INTENCIÓN
+# ---------------------------------------------------------------------------
+
+def _procesar_solicitud_de_fecha(phone_number: str, state: dict, fecha_str: str | None) -> str:
+    """
+    Lógica compartida para "agendar_cita" y "consultar_disponibilidad":
+    si ya tenemos una fecha, calculamos y mostramos los horarios
+    disponibles; si no, se la pedimos explícitamente.
+    """
+    if not fecha_str:
+        return (
+            "Claro, ¿para qué día te gustaría la cita? Solo dime el día y el "
+            "mes para no confundirnos (ej. \"el 15 de julio\" o \"el próximo miércoles\")."
+        )
+
+    try:
+        fecha = date.fromisoformat(fecha_str)
+    except ValueError:
+        logger.warning("Fecha inválida devuelta por NLU: %s", fecha_str)
+        return "No logré entender bien la fecha, ¿podrías decírmela de otra forma?"
+
+    try:
+        eventos_ocupados = calendar_service.get_busy_events(fecha)
+    except Exception as exc:
+        logger.error("Fallo al consultar Google Calendar: %s", exc)
+        return whatsapp_client.build_error_message()
+
+    slots = rules_engine.generate_available_slots(fecha, eventos_ocupados)
+    fecha_legible = _format_fecha_legible(fecha)
+
+    if not slots:
+        return whatsapp_client.build_available_slots_message(fecha_legible, [])
+
+    state["stage"] = "esperando_seleccion_horario"
+    state["fecha"] = fecha
+    state["slots_ofrecidos"] = slots
+    return whatsapp_client.build_available_slots_message(fecha_legible, slots)
+
+
+def _despachar_intencion(phone_number: str, state: dict, resultado_nlu: dict, profile_name: str | None) -> str:
+    """
+    Dado el resultado ya extraído por Claude, decide qué hacer. Se separa
+    de la llamada a la API para poder reutilizarse tanto en una
+    conversación nueva como cuando reinterpretamos un mensaje que no
+    calzó con lo que esperábamos en medio de otro flujo (ver
+    _fallback_reinterpretar).
+    """
+    intencion = resultado_nlu["intencion"]
+
+    if resultado_nlu.get("nombre_cliente"):
+        state["nombre_cliente"] = resultado_nlu["nombre_cliente"]
+
+    nombre_para_saludo = state["nombre_cliente"] or profile_name
+
+    if intencion == "saludo":
+        return whatsapp_client.build_greeting_message(nombre_para_saludo)
+
+    if intencion in ("agendar_cita", "consultar_disponibilidad"):
+        return _procesar_solicitud_de_fecha(phone_number, state, resultado_nlu.get("fecha"))
+
+    if intencion == "cancelar_cita":
+        return _iniciar_busqueda_de_cita(phone_number, state, accion="cancelar")
+
+    if intencion == "reprogramar_cita":
+        return _iniciar_busqueda_de_cita(phone_number, state, accion="reprogramar")
+
+    # intencion == "otro"
+    return (
+        "No estoy seguro de haber entendido. Puedo ayudarte a agendar, cancelar "
+        "o reprogramar una cita — solo dime, por ejemplo, \"quiero una cita el "
+        "jueves por la mañana\"."
+    )
+
+
+def _fallback_reinterpretar(phone_number: str, state: dict, message_body: str,
+                             profile_name: str | None, mensaje_aclaracion: str) -> str:
+    """
+    Se usa cuando el cliente estaba en medio de un flujo puntual (elegir
+    un horario, confirmar sí/no, elegir una cita) pero su respuesta no
+    calzó con un match determinista. Antes de repetir el mismo mensaje a
+    ciegas —lo que puede dejar la conversación "atorada"—, probamos a
+    reinterpretar el mensaje completo con Claude, por si el cliente
+    cambió de tema.
+
+    Si Claude tampoco logra identificar nada útil, nos quedamos en el
+    mismo punto de la conversación (sin resetear el estado) y repetimos
+    la aclaración original.
+    """
+    resultado_nlu = nlu_service.extract_intent(message_body)
+
+    if resultado_nlu["intencion"] == "otro" and not resultado_nlu.get("fecha"):
+        return mensaje_aclaracion
+
+    # El cliente sí quiso decir algo distinto: reiniciamos el flujo en el
+    # que estaba atorado (conservando su nombre) y lo procesamos como
+    # una solicitud nueva.
+    _reset_state(phone_number)
+    nuevo_state = _get_state(phone_number)
+    return _despachar_intencion(phone_number, nuevo_state, resultado_nlu, profile_name)
+
+
+# ---------------------------------------------------------------------------
 # ORQUESTADOR PRINCIPAL
 # ---------------------------------------------------------------------------
 
@@ -234,34 +336,39 @@ def handle_incoming_message(phone_number: str, message_body: str, profile_name: 
 
         if stage == "esperando_seleccion_horario":
             hora_elegida = _match_slot_selection(message_body, state["slots_ofrecidos"])
-            if not hora_elegida:
-                return (
-                    "No logré identificar el horario. ¿Podrías decirme el número "
-                    "de la lista o la hora exacta? (ej. \"2\" o \"10:15\")"
+            if hora_elegida:
+                nombre = state["nombre_cliente"] or profile_name
+                evento = calendar_service.create_appointment(
+                    target_date=state["fecha"],
+                    start_time_str=hora_elegida,
+                    client_name=nombre or "Cliente WhatsApp",
+                    phone_number=phone_number,
                 )
+                fecha_legible = _format_fecha_legible(state["fecha"])
+                _reset_state(phone_number)
+                logger.info("Cita creada para %s: %s", phone_number, evento.get("htmlLink"))
+                return whatsapp_client.build_confirmation_message(fecha_legible, hora_elegida, nombre)
 
-            nombre = state["nombre_cliente"] or profile_name
-            evento = calendar_service.create_appointment(
-                target_date=state["fecha"],
-                start_time_str=hora_elegida,
-                client_name=nombre or "Cliente WhatsApp",
-                phone_number=phone_number,
+            mensaje_aclaracion = (
+                "No logré identificar el horario. ¿Podrías decirme el número "
+                "de la lista o la hora exacta? (ej. \"2\" o \"10:15\")"
             )
-            fecha_legible = _format_fecha_legible(state["fecha"])
-            _reset_state(phone_number)
-            logger.info("Cita creada para %s: %s", phone_number, evento.get("htmlLink"))
-            return whatsapp_client.build_confirmation_message(fecha_legible, hora_elegida, nombre)
+            return _fallback_reinterpretar(phone_number, state, message_body, profile_name, mensaje_aclaracion)
 
         if stage == "esperando_seleccion_cita":
             cita_elegida = _match_appointment_selection(message_body, state["citas_encontradas"])
-            if not cita_elegida:
-                return "No logré identificar cuál cita. ¿Podrías decirme el número de la lista?"
-            return _avanzar_con_cita_elegida(state, cita_elegida, state["accion_pendiente"])
+            if cita_elegida:
+                return _avanzar_con_cita_elegida(state, cita_elegida, state["accion_pendiente"])
+
+            mensaje_aclaracion = "No logré identificar cuál cita. ¿Podrías decirme el número de la lista?"
+            return _fallback_reinterpretar(phone_number, state, message_body, profile_name, mensaje_aclaracion)
 
         if stage == "esperando_confirmacion_cancelacion":
             confirmacion = _parse_si_no(message_body)
+
             if confirmacion is None:
-                return "¿Confirmas que quieres cancelar esa cita? Responde \"sí\" o \"no\"."
+                mensaje_aclaracion = "¿Confirmas que quieres cancelar esa cita? Responde \"sí\" o \"no\"."
+                return _fallback_reinterpretar(phone_number, state, message_body, profile_name, mensaje_aclaracion)
 
             evento = state["evento_objetivo"]
             if confirmacion is False:
@@ -278,13 +385,14 @@ def handle_incoming_message(phone_number: str, message_body: str, profile_name: 
             return whatsapp_client.build_cancel_success_message()
 
         if stage == "esperando_nueva_fecha_reprogramacion":
-            # Aquí sí usamos Claude, porque la nueva fecha viene en
-            # lenguaje libre ("el próximo lunes en la mañana", etc.).
+            # Aquí sí usamos Claude directo, porque la nueva fecha viene en
+            # lenguaje libre ("el próximo lunes en la mañana", etc.) y no
+            # hay ningún match determinista posible antes de esto.
             resultado_nlu = nlu_service.extract_intent(message_body)
             fecha_str = resultado_nlu.get("fecha")
 
             if not fecha_str:
-                return "¿Para qué día te gustaría moverla? (ej. \"el lunes\", \"mañana\")"
+                return "¿Para qué día te gustaría moverla? Dime el día y el mes (ej. \"el 21 de julio\")."
 
             try:
                 nueva_fecha = date.fromisoformat(fecha_str)
@@ -317,27 +425,28 @@ def handle_incoming_message(phone_number: str, message_body: str, profile_name: 
 
         if stage == "esperando_seleccion_horario_reprogramacion":
             hora_elegida = _match_slot_selection(message_body, state["slots_ofrecidos"])
-            if not hora_elegida:
-                return (
-                    "No logré identificar el horario. ¿Podrías decirme el número "
-                    "de la lista o la hora exacta? (ej. \"2\" o \"10:15\")"
-                )
+            if hora_elegida:
+                evento_actual = state["evento_objetivo"]
+                try:
+                    calendar_service.update_appointment(
+                        event_id=evento_actual["id"],
+                        new_date=state["fecha"],
+                        new_start_time_str=hora_elegida,
+                    )
+                except Exception as exc:
+                    logger.error("Fallo al reprogramar la cita %s: %s", evento_actual.get("id"), exc)
+                    return whatsapp_client.build_error_message()
 
-            evento_actual = state["evento_objetivo"]
-            try:
-                calendar_service.update_appointment(
-                    event_id=evento_actual["id"],
-                    new_date=state["fecha"],
-                    new_start_time_str=hora_elegida,
-                )
-            except Exception as exc:
-                logger.error("Fallo al reprogramar la cita %s: %s", evento_actual.get("id"), exc)
-                return whatsapp_client.build_error_message()
+                nombre = state["nombre_cliente"] or profile_name
+                fecha_legible = _format_fecha_legible(state["fecha"])
+                _reset_state(phone_number)
+                return whatsapp_client.build_confirmation_message(fecha_legible, hora_elegida, nombre)
 
-            nombre = state["nombre_cliente"] or profile_name
-            fecha_legible = _format_fecha_legible(state["fecha"])
-            _reset_state(phone_number)
-            return whatsapp_client.build_confirmation_message(fecha_legible, hora_elegida, nombre)
+            mensaje_aclaracion = (
+                "No logré identificar el horario. ¿Podrías decirme el número "
+                "de la lista o la hora exacta? (ej. \"2\" o \"10:15\")"
+            )
+            return _fallback_reinterpretar(phone_number, state, message_body, profile_name, mensaje_aclaracion)
 
         # -------------------------------------------------------------
         # Conversación nueva (stage == "inicio") o el cliente escribió
@@ -345,60 +454,7 @@ def handle_incoming_message(phone_number: str, message_body: str, profile_name: 
         # intención.
         # -------------------------------------------------------------
         resultado_nlu = nlu_service.extract_intent(message_body)
-        intencion = resultado_nlu["intencion"]
-
-        if resultado_nlu.get("nombre_cliente"):
-            state["nombre_cliente"] = resultado_nlu["nombre_cliente"]
-
-        nombre_para_saludo = state["nombre_cliente"] or profile_name
-
-        if intencion == "saludo":
-            return whatsapp_client.build_greeting_message(nombre_para_saludo)
-
-        if intencion in ("agendar_cita", "consultar_disponibilidad"):
-            fecha_str = resultado_nlu.get("fecha")
-
-            if not fecha_str:
-                return (
-                    "Claro, ¿para qué día te gustaría la cita? "
-                    "(puedes decir \"mañana\", \"el viernes\", o una fecha exacta)"
-                )
-
-            try:
-                fecha = date.fromisoformat(fecha_str)
-            except ValueError:
-                logger.warning("Fecha inválida devuelta por NLU: %s", fecha_str)
-                return "No logré entender bien la fecha, ¿podrías decírmela de otra forma?"
-
-            try:
-                eventos_ocupados = calendar_service.get_busy_events(fecha)
-            except Exception as exc:
-                logger.error("Fallo al consultar Google Calendar: %s", exc)
-                return whatsapp_client.build_error_message()
-
-            slots = rules_engine.generate_available_slots(fecha, eventos_ocupados)
-            fecha_legible = _format_fecha_legible(fecha)
-
-            if not slots:
-                return whatsapp_client.build_available_slots_message(fecha_legible, [])
-
-            state["stage"] = "esperando_seleccion_horario"
-            state["fecha"] = fecha
-            state["slots_ofrecidos"] = slots
-            return whatsapp_client.build_available_slots_message(fecha_legible, slots)
-
-        if intencion == "cancelar_cita":
-            return _iniciar_busqueda_de_cita(phone_number, state, accion="cancelar")
-
-        if intencion == "reprogramar_cita":
-            return _iniciar_busqueda_de_cita(phone_number, state, accion="reprogramar")
-
-        # intencion == "otro"
-        return (
-            "No estoy seguro de haber entendido. Puedo ayudarte a agendar, cancelar "
-            "o reprogramar una cita — solo dime, por ejemplo, \"quiero una cita el "
-            "jueves por la mañana\"."
-        )
+        return _despachar_intencion(phone_number, state, resultado_nlu, profile_name)
 
     except Exception as exc:
         logger.error("Error inesperado procesando mensaje de %s: %s", phone_number, exc)
