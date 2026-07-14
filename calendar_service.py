@@ -199,7 +199,8 @@ def _parse_event(event: dict) -> dict | None:
 # CREACIÓN DE CITAS
 # ---------------------------------------------------------------------------
 
-def create_appointment(target_date: date, start_time_str: str, client_name: str, phone_number: str) -> dict:
+def create_appointment(target_date: date, start_time_str: str, client_name: str,
+                       phone_number: str, description: str | None = None) -> dict:
     """
     Inserta una nueva cita de 1 hora en Google Calendar.
 
@@ -208,7 +209,9 @@ def create_appointment(target_date: date, start_time_str: str, client_name: str,
         start_time_str: hora de inicio en formato "HH:MM" (ej. "10:15"),
                          tal como la devuelve rules_engine.generate_available_slots.
         client_name: nombre del cliente (para el título del evento).
-        phone_number: número de WhatsApp del cliente (se guarda en la descripción).
+        phone_number: número de WhatsApp del cliente (se guarda visible
+                       en la descripción del evento).
+        description: motivo o descripción de la cita que dio el cliente.
 
     Returns:
         dict con al menos {"id": str, "htmlLink": str} del evento creado.
@@ -225,9 +228,20 @@ def create_appointment(target_date: date, start_time_str: str, client_name: str,
     start_dt = datetime(target_date.year, target_date.month, target_date.day, hour, minute, tzinfo=TIMEZONE)
     end_dt = start_dt + timedelta(hours=1)
 
+    # Armamos la descripción del evento de forma estructurada para que sea
+    # legible desde Google Calendar y también parseable si algún día se
+    # necesita extraer el teléfono programáticamente.
+    lineas_descripcion = [
+        f"📱 WhatsApp: {phone_number}",
+    ]
+    if description:
+        lineas_descripcion.append(f"📝 Motivo: {description}")
+    lineas_descripcion.append("")
+    lineas_descripcion.append("Agendado automáticamente vía WhatsApp Bot.")
+
     event_body = {
         "summary": f"Cita - {client_name}",
-        "description": f"Agendado automáticamente vía WhatsApp Bot.\nTeléfono: {phone_number}",
+        "description": "\n".join(lineas_descripcion),
         "start": {"dateTime": start_dt.isoformat(), "timeZone": TIMEZONE_NAME},
         "end": {"dateTime": end_dt.isoformat(), "timeZone": TIMEZONE_NAME},
     }

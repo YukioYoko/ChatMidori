@@ -39,15 +39,19 @@ logger = logging.getLogger("conversation_manager")
 #   "stage": uno de:
 #       "inicio"
 #       "esperando_seleccion_horario"              (agendando cita nueva)
+#       "esperando_nombre"                          (agendando: pedir nombre)
+#       "esperando_descripcion"                     (agendando: pedir motivo)
 #       "esperando_seleccion_cita"                  (cancelar/reprogramar: elegir cuál)
 #       "esperando_confirmacion_cancelacion"        (cancelar: confirmar sí/no)
 #       "esperando_nueva_fecha_reprogramacion"      (reprogramar: pedir nueva fecha)
 #       "esperando_seleccion_horario_reprogramacion" (reprogramar: elegir nuevo horario)
 #   "fecha": date | None,
 #   "slots_ofrecidos": list[str],
+#   "hora_pendiente": str | None,       # hora ya elegida, esperando nombre/descripción
 #   "nombre_cliente": str | None,
-#   "citas_encontradas": list[dict],   # candidatas al buscar por teléfono
-#   "evento_objetivo": dict | None,    # la cita puntual sobre la que se actúa
+#   "descripcion_cita": str | None,
+#   "citas_encontradas": list[dict],    # candidatas al buscar por teléfono
+#   "evento_objetivo": dict | None,     # la cita puntual sobre la que se actúa
 # }
 CONVERSATIONS: dict[str, dict] = {}
 
@@ -66,7 +70,9 @@ def _estado_vacio() -> dict:
         "stage": "inicio",
         "fecha": None,
         "slots_ofrecidos": [],
+        "hora_pendiente": None,
         "nombre_cliente": None,
+        "descripcion_cita": None,
         "citas_encontradas": [],
         "evento_objetivo": None,
         "accion_pendiente": None,  # "cancelar" | "reprogramar", mientras se elige la cita
@@ -107,6 +113,49 @@ def _parse_si_no(message: str) -> bool | None:
     if texto in NEGACIONES or texto.startswith("no "):
         return False
     return None
+
+
+_PREFIJOS_NOMBRE = (
+    "me llamo ", "mi nombre es ", "soy ", "es para ", "para ",
+    "a nombre de ", "el nombre es ", "nombre: ",
+)
+
+
+def _extraer_nombre(message: str) -> str | None:
+    """
+    Extrae un nombre de un mensaje casual, quitando prefijos comunes.
+
+    Ejemplos:
+        "soy Ana Pérez"       -> "Ana Pérez"
+        "Me llamo Juan"       -> "Juan"
+        "es para Carlos"      -> "Carlos"
+        "Ana"                 -> "Ana"
+
+    Devuelve None si el mensaje está vacío. La validación de "esto se
+    ve como un nombre real" no la hacemos aquí — para un chatbot de
+    citas, aceptar lo que el cliente escriba y capitalizarlo es más
+    tolerante que exigirle un formato.
+    """
+    texto = message.strip()
+    if not texto:
+        return None
+
+    texto_lower = texto.lower()
+    for prefijo in _PREFIJOS_NOMBRE:
+        if texto_lower.startswith(prefijo):
+            texto = texto[len(prefijo):].strip()
+            break
+
+    # Quitamos signos de puntuación finales que suelen colarse.
+    texto = texto.rstrip(".,!?;:")
+
+    if not texto:
+        return None
+
+    # Capitalización simple: cada palabra empieza con mayúscula. No es
+    # perfecto para "de la Cruz" o apellidos con partículas, pero es una
+    # mejora clara sobre lo que el cliente escribió y evita "juan perez".
+    return " ".join(palabra.capitalize() for palabra in texto.split())
 
 
 def _format_fecha_legible(fecha: date) -> str:
@@ -168,6 +217,32 @@ def _extract_hours_from_message(message: str) -> list[str]:
     return resultados
 
 
+_PALABRAS_QUE_INDICAN_FECHA = (
+    " de enero", " de febrero", " de marzo", " de abril", " de mayo",
+    " de junio", " de julio", " de agosto", " de septiembre",
+    " de octubre", " de noviembre", " de diciembre",
+    "mañana", "pasado mañana", "hoy",
+    "lunes", "martes", "miércoles", "miercoles", "jueves", "viernes",
+    "sábado", "sabado", "domingo",
+    "próxima", "proxima", "próximo", "proximo",
+    "semana", "mes",
+)
+
+
+def _mensaje_parece_fecha(texto: str) -> bool:
+    """
+    Heurística barata para detectar si el cliente está mencionando una
+    fecha en su mensaje (aunque la lista anterior siga vigente).
+
+    Es importante para evitar que "y para el 15 de julio?" se interprete
+    como "opción 15 de la lista": si detectamos que el mensaje habla de
+    una fecha, el matcher devuelve None y el orquestador reinterpreta el
+    mensaje entero con Claude.
+    """
+    texto_lower = texto.lower()
+    return any(clave in texto_lower for clave in _PALABRAS_QUE_INDICAN_FECHA)
+
+
 def _match_slot_selection(message: str, slots_ofrecidos: list[str]) -> str | None:
     """
     Cuando ya le mostramos al cliente una lista numerada de horarios,
@@ -179,8 +254,18 @@ def _match_slot_selection(message: str, slots_ofrecidos: list[str]) -> str | Non
       - Hora exacta: "10:15", "9:00", "a las 9", "9am", "2pm"
 
     Devuelve la hora "HH:MM" seleccionada, o None si no hubo match claro.
+
+    NO hace match si el mensaje parece contener una fecha (ej. "y para
+    el 15 de julio?"): en ese caso devolvemos None para que el flujo
+    principal reinterprete el mensaje con Claude.
     """
     texto = message.strip().lower()
+
+    # Guardarraíl anti-confusión: si el mensaje menciona una fecha, no lo
+    # tratamos como selección de horario — es casi seguro que el cliente
+    # cambió de tema y quiere consultar otro día.
+    if _mensaje_parece_fecha(texto):
+        return None
 
     # Números solos ("9", "12") son ambiguos: pueden ser "opción N" de la
     # lista o una hora "N:00". Preferimos interpretarlos como opción de
@@ -194,9 +279,12 @@ def _match_slot_selection(message: str, slots_ofrecidos: list[str]) -> str | Non
         # extractor de horas más abajo (podría ser "9" queriendo decir 09:00).
 
     # "la N" / "opción N" siempre se interpretan como número de lista.
+    # Usamos regex con límite de palabra para evitar que "la 25" haga match
+    # con "la 2" antes de llegar a "la 25".
     for i, hora in enumerate(slots_ofrecidos):
         numero = str(i + 1)
-        if f"la {numero}" in texto or f"opción {numero}" in texto or f"opcion {numero}" in texto:
+        patron_opcion = re.compile(rf"\b(la|opción|opcion)\s+{numero}\b", re.IGNORECASE)
+        if patron_opcion.search(texto):
             return hora
 
     # Coincidencia por hora en lenguaje natural: extraemos todas las
@@ -217,9 +305,15 @@ def _match_appointment_selection(message: str, citas: list[dict]) -> dict | None
     """
     texto = message.strip().lower()
 
+    if texto.isdigit():
+        indice = int(texto) - 1
+        if 0 <= indice < len(citas):
+            return citas[indice]
+
     for i, cita in enumerate(citas):
         numero = str(i + 1)
-        if texto == numero or f"la {numero}" in texto or f"opción {numero}" in texto or f"opcion {numero}" in texto:
+        patron_opcion = re.compile(rf"\b(la|opción|opcion)\s+{numero}\b", re.IGNORECASE)
+        if patron_opcion.search(texto):
             return cita
 
     return None
@@ -403,23 +497,57 @@ def handle_incoming_message(phone_number: str, message_body: str, profile_name: 
         if stage == "esperando_seleccion_horario":
             hora_elegida = _match_slot_selection(message_body, state["slots_ofrecidos"])
             if hora_elegida:
-                nombre = state["nombre_cliente"] or profile_name
-                evento = calendar_service.create_appointment(
-                    target_date=state["fecha"],
-                    start_time_str=hora_elegida,
-                    client_name=nombre or "Cliente WhatsApp",
-                    phone_number=phone_number,
-                )
+                # No creamos la cita todavía: primero pedimos nombre y motivo.
+                state["stage"] = "esperando_nombre"
+                state["hora_pendiente"] = hora_elegida
                 fecha_legible = _format_fecha_legible(state["fecha"])
-                _reset_state(phone_number)
-                logger.info("Cita creada para %s: %s", phone_number, evento.get("htmlLink"))
-                return whatsapp_client.build_confirmation_message(fecha_legible, hora_elegida, nombre)
+                return whatsapp_client.build_ask_name_message(fecha_legible, hora_elegida)
 
             mensaje_aclaracion = (
                 "No logré identificar el horario. ¿Podrías decirme el número "
                 "de la lista o la hora exacta? (ej. \"2\" o \"10:15\")"
             )
             return _fallback_reinterpretar(phone_number, state, message_body, profile_name, mensaje_aclaracion)
+
+        if stage == "esperando_nombre":
+            # El nombre puede venir con o sin frase alrededor ("soy Ana",
+            # "Ana Pérez", "es para Juan"). Lo aceptamos tal cual, con un
+            # poco de limpieza básica.
+            nombre = _extraer_nombre(message_body)
+            if not nombre:
+                return "¿Me podrías decir el nombre completo de la persona para la cita?"
+
+            state["nombre_cliente"] = nombre
+            state["stage"] = "esperando_descripcion"
+            return whatsapp_client.build_ask_description_message()
+
+        if stage == "esperando_descripcion":
+            descripcion = message_body.strip()
+            if not descripcion:
+                return "¿Me podrías dar una breve descripción del motivo de la cita?"
+
+            # Ya tenemos todo lo necesario: creamos la cita en Google Calendar.
+            state["descripcion_cita"] = descripcion
+            try:
+                evento = calendar_service.create_appointment(
+                    target_date=state["fecha"],
+                    start_time_str=state["hora_pendiente"],
+                    client_name=state["nombre_cliente"],
+                    phone_number=phone_number,
+                    description=descripcion,
+                )
+            except Exception as exc:
+                logger.error("Fallo al crear la cita para %s: %s", phone_number, exc)
+                return whatsapp_client.build_error_message()
+
+            fecha_legible = _format_fecha_legible(state["fecha"])
+            hora = state["hora_pendiente"]
+            nombre = state["nombre_cliente"]
+            _reset_state(phone_number)
+            # Preservamos el nombre para conversaciones futuras.
+            CONVERSATIONS[phone_number]["nombre_cliente"] = nombre
+            logger.info("Cita creada para %s: %s", phone_number, evento.get("htmlLink"))
+            return whatsapp_client.build_confirmation_message(fecha_legible, hora, nombre)
 
         if stage == "esperando_seleccion_cita":
             cita_elegida = _match_appointment_selection(message_body, state["citas_encontradas"])

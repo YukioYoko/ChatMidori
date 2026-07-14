@@ -195,6 +195,22 @@ def build_reschedule_prompt(cita_legible: str) -> str:
     )
 
 
+def build_ask_name_message(fecha_legible: str, hora: str) -> str:
+    """Después de que el cliente elige un horario, le pedimos su nombre."""
+    return (
+        f"Perfecto, {fecha_legible} a las {hora}. 📌\n\n"
+        "¿A nombre de quién agendo la cita?"
+    )
+
+
+def build_ask_description_message() -> str:
+    """Después del nombre, le pedimos una breve descripción de la cita."""
+    return (
+        "¡Gracias! Una última cosa: ¿me podrías dar una breve descripción "
+        "del motivo de la cita? (ej. \"consulta general\", \"revisión de resultados\")"
+    )
+
+
 def build_error_message() -> str:
     """Mensaje genérico y amable cuando algo falla internamente."""
     return (
