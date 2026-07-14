@@ -56,19 +56,48 @@ TIMEZONE_NAME = "America/Mexico_City"
 CREDENTIALS_FILE = "credentials.json"
 TOKEN_FILE = "token.json"
 
+# -----------------------------------------------------------------------
+# SOPORTE PARA DESPLIEGUE EN LA NUBE (Render, Railway, etc.)
+#
+# En hosting en la nube el sistema de archivos es efímero: se borra en
+# cada redeploy, así que token.json no puede vivir en disco. En su lugar,
+# el contenido COMPLETO del token se puede pasar por la variable de
+# entorno GOOGLE_TOKEN_JSON (el JSON tal cual, en una sola línea).
+#
+# Flujo recomendado:
+#   1. En tu máquina local, corre una vez `python calendar_service.py`
+#      para generar token.json con el flujo interactivo del navegador.
+#   2. Copia el contenido de token.json y pégalo como valor de la
+#      variable de entorno GOOGLE_TOKEN_JSON en tu plataforma de hosting.
+#   3. El refresh token no expira con el uso, así que este valor es
+#      estable — solo tendrías que regenerarlo si revocas el acceso.
+# -----------------------------------------------------------------------
+GOOGLE_TOKEN_ENV_VAR = "GOOGLE_TOKEN_JSON"
 
-# ---------------------------------------------------------------------------
-# AUTENTICACIÓN
-# ---------------------------------------------------------------------------
 
 def _get_credentials() -> Credentials:
     """
-    Carga credenciales válidas desde token.json, refrescándolas si expiraron,
-    o disparando el flujo OAuth interactivo si es la primera vez.
+    Carga credenciales válidas en este orden de prioridad:
+      1. Variable de entorno GOOGLE_TOKEN_JSON (para despliegue en nube).
+      2. Archivo token.json local, refrescándolo si expiró.
+      3. Flujo OAuth interactivo (solo funciona en local, abre navegador).
     """
+    import json as _json
+
     creds = None
 
-    if os.path.exists(TOKEN_FILE):
+    # 1) Nube: token completo en variable de entorno.
+    token_env = os.environ.get(GOOGLE_TOKEN_ENV_VAR)
+    if token_env:
+        try:
+            info = _json.loads(token_env)
+            creds = Credentials.from_authorized_user_info(info, SCOPES)
+        except (ValueError, KeyError) as exc:
+            logger.error("GOOGLE_TOKEN_JSON tiene un formato inválido: %s", exc)
+            creds = None
+
+    # 2) Local: token en archivo.
+    if creds is None and os.path.exists(TOKEN_FILE):
         creds = Credentials.from_authorized_user_file(TOKEN_FILE, SCOPES)
 
     if not creds or not creds.valid:
@@ -80,6 +109,14 @@ def _get_credentials() -> Credentials:
                 creds = None
 
         if not creds:
+            # 3) Flujo interactivo: solo tiene sentido en local (abre un
+            # navegador). En un servidor en la nube esto fallará a
+            # propósito con un mensaje claro.
+            if token_env:
+                raise RuntimeError(
+                    "El token de GOOGLE_TOKEN_JSON expiró y no se pudo refrescar. "
+                    "Regenera token.json en tu máquina local y actualiza la variable."
+                )
             if not os.path.exists(CREDENTIALS_FILE):
                 raise FileNotFoundError(
                     f"No se encontró '{CREDENTIALS_FILE}'. Descárgalo desde "
@@ -88,9 +125,11 @@ def _get_credentials() -> Credentials:
             flow = InstalledAppFlow.from_client_secrets_file(CREDENTIALS_FILE, SCOPES)
             creds = flow.run_local_server(port=0)
 
-        # Guardamos el token (nuevo o refrescado) para la próxima ejecución.
-        with open(TOKEN_FILE, "w") as token_file:
-            token_file.write(creds.to_json())
+        # Guardamos el token (nuevo o refrescado) para la próxima ejecución,
+        # solo si estamos trabajando con archivos locales.
+        if not token_env:
+            with open(TOKEN_FILE, "w") as token_file:
+                token_file.write(creds.to_json())
 
     return creds
 
