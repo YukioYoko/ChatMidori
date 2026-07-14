@@ -118,27 +118,93 @@ def _format_fecha_legible(fecha: date) -> str:
 # INTERPRETACIÓN DE LA SELECCIÓN DE HORARIO
 # ---------------------------------------------------------------------------
 
+import re
+
+def _extract_hours_from_message(message: str) -> list[str]:
+    """
+    Extrae todas las horas mencionadas en un mensaje casual del cliente y
+    las devuelve normalizadas al formato "HH:MM" (24h).
+
+    Acepta variantes comunes:
+      "10:15"       -> "10:15"
+      "9:00"        -> "09:00"    (agrega cero inicial)
+      "a las 9"     -> "09:00"    (asume :00 si solo hay hora)
+      "9am"         -> "09:00"
+      "2pm"         -> "14:00"
+      "1:30 pm"     -> "13:30"
+      "12am"        -> "00:00"    (medianoche)
+      "12pm"        -> "12:00"    (mediodía)
+
+    Devuelve una lista porque en teoría el cliente podría mencionar varias
+    horas (aunque en la práctica el flujo espera una).
+    """
+    texto = message.strip().lower()
+    resultados: list[str] = []
+
+    # Regex único que captura hora + minutos opcionales + am/pm opcional.
+    # Ej: "9", "9:00", "10:15", "2pm", "1:30 pm"
+    patron = re.compile(r"(\d{1,2})(?::(\d{2}))?\s*(am|pm|a\.m\.|p\.m\.)?", re.IGNORECASE)
+
+    for match in patron.finditer(texto):
+        hora_int = int(match.group(1))
+        minuto_int = int(match.group(2)) if match.group(2) else 0
+        meridiano = match.group(3)
+
+        if meridiano:
+            meridiano = meridiano.replace(".", "").lower()
+            if meridiano == "pm" and hora_int < 12:
+                hora_int += 12
+            elif meridiano == "am" and hora_int == 12:
+                hora_int = 0
+
+        # Descartamos valores imposibles (ej. el "15" de "el 15 de julio"
+        # cuando no traía am/pm ni ":": no es una hora válida como tal si
+        # excede 23).
+        if hora_int > 23 or minuto_int > 59:
+            continue
+
+        resultados.append(f"{hora_int:02d}:{minuto_int:02d}")
+
+    return resultados
+
+
 def _match_slot_selection(message: str, slots_ofrecidos: list[str]) -> str | None:
     """
     Cuando ya le mostramos al cliente una lista numerada de horarios,
     intentamos hacer match con su respuesta sin volver a llamar a Claude
     (ahorra costo y latencia para el caso más común).
 
-    Acepta: "1", "la 1", "la primera", o la hora directa "10:15".
+    Acepta:
+      - Número de lista: "1", "la 1", "la primera", "opción 1"
+      - Hora exacta: "10:15", "9:00", "a las 9", "9am", "2pm"
+
     Devuelve la hora "HH:MM" seleccionada, o None si no hubo match claro.
     """
     texto = message.strip().lower()
 
-    # Coincidencia directa por número de la lista (1-indexado).
+    # Números solos ("9", "12") son ambiguos: pueden ser "opción N" de la
+    # lista o una hora "N:00". Preferimos interpretarlos como opción de
+    # lista cuando ese número existe en el rango de slots ofrecidos,
+    # porque es lo que el cliente suele intentar tras leer la lista.
+    if texto.isdigit():
+        indice = int(texto) - 1
+        if 0 <= indice < len(slots_ofrecidos):
+            return slots_ofrecidos[indice]
+        # Si el número no calza con ninguna opción, lo dejamos pasar al
+        # extractor de horas más abajo (podría ser "9" queriendo decir 09:00).
+
+    # "la N" / "opción N" siempre se interpretan como número de lista.
     for i, hora in enumerate(slots_ofrecidos):
         numero = str(i + 1)
-        if texto == numero or f"la {numero}" in texto or f"opción {numero}" in texto or f"opcion {numero}" in texto:
+        if f"la {numero}" in texto or f"opción {numero}" in texto or f"opcion {numero}" in texto:
             return hora
 
-    # Coincidencia directa por hora exacta mencionada en el texto.
-    for hora in slots_ofrecidos:
-        if hora in texto:
-            return hora
+    # Coincidencia por hora en lenguaje natural: extraemos todas las
+    # horas mencionadas y buscamos alguna que esté en los slots ofrecidos.
+    horas_mencionadas = _extract_hours_from_message(texto)
+    for hora_normalizada in horas_mencionadas:
+        if hora_normalizada in slots_ofrecidos:
+            return hora_normalizada
 
     return None
 
