@@ -21,12 +21,14 @@ mover CONVERSATIONS a Redis o SQLite.
 """
 
 import logging
+import re
 from datetime import date, datetime
 
 import calendar_service
 import rules_engine
 import nlu_service
 import whatsapp_client
+import business_config
 
 logger = logging.getLogger("conversation_manager")
 
@@ -166,8 +168,6 @@ def _format_fecha_legible(fecha: date) -> str:
 # ---------------------------------------------------------------------------
 # INTERPRETACIÓN DE LA SELECCIÓN DE HORARIO
 # ---------------------------------------------------------------------------
-
-import re
 
 def _extract_hours_from_message(message: str) -> list[str]:
     """
@@ -377,12 +377,23 @@ def _procesar_solicitud_de_fecha(phone_number: str, state: dict, fecha_str: str 
     Lógica compartida para "agendar_cita" y "consultar_disponibilidad":
     si ya tenemos una fecha, calculamos y mostramos los horarios
     disponibles; si no, se la pedimos explícitamente.
+
+    Detalle de continuidad: si el cliente hace una pregunta relacionada
+    con horarios sin mencionar una fecha nueva ("¿a las 2pm no hay?"),
+    pero ya venía viendo una lista para cierta fecha, reutilizamos esa
+    fecha en vez de volver a preguntársela — así la conversación fluye
+    naturalmente sin perder el contexto.
     """
     if not fecha_str:
-        return (
-            "Claro, ¿para qué día te gustaría la cita? Solo dime el día y el "
-            "mes para no confundirnos (ej. \"el 15 de julio\" o \"el próximo miércoles\")."
-        )
+        fecha_previa = state.get("fecha")
+        if fecha_previa is not None:
+            # Reutilizamos la fecha que ya estaba en la conversación.
+            fecha_str = fecha_previa.isoformat()
+        else:
+            return (
+                "Claro, ¿para qué día te gustaría la cita? Solo dime el día y el "
+                "mes para no confundirnos (ej. \"el 15 de julio\" o \"el próximo miércoles\")."
+            )
 
     try:
         fecha = date.fromisoformat(fecha_str)
@@ -463,10 +474,15 @@ def _fallback_reinterpretar(phone_number: str, state: dict, message_body: str,
         return mensaje_aclaracion
 
     # El cliente sí quiso decir algo distinto: reiniciamos el flujo en el
-    # que estaba atorado (conservando su nombre) y lo procesamos como
-    # una solicitud nueva.
+    # que estaba atorado (conservando su nombre Y la fecha previa) y
+    # procesamos como una solicitud nueva. La fecha previa es importante
+    # para preguntas de continuidad tipo "¿y a las 2pm?": aunque Claude
+    # no detecte una fecha en el mensaje, seguimos hablando de la misma
+    # fecha que ya estaba en la conversación.
+    fecha_previa = state.get("fecha")
     _reset_state(phone_number)
     nuevo_state = _get_state(phone_number)
+    nuevo_state["fecha"] = fecha_previa
     return _despachar_intencion(phone_number, nuevo_state, resultado_nlu, profile_name)
 
 

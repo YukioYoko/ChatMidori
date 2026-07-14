@@ -23,6 +23,8 @@ from twilio.rest import Client
 from twilio.request_validator import RequestValidator
 from twilio.base.exceptions import TwilioRestException
 
+import business_config
+
 logger = logging.getLogger("whatsapp_client")
 
 # ---------------------------------------------------------------------------
@@ -107,15 +109,7 @@ def send_whatsapp_message(to_number: str, body: str) -> bool:
 
 def build_greeting_message(nombre_cliente: str | None = None) -> str:
     """Mensaje de bienvenida cuando el cliente solo saluda."""
-    saludo = f"¡Hola{', ' + nombre_cliente if nombre_cliente else ''}! 👋"
-    return (
-        f"{saludo}\n\n"
-        "Soy el asistente virtual para agendar tus citas. Puedes decirme "
-        "algo como:\n"
-        "  • \"Quiero una cita mañana en la tarde\"\n"
-        "  • \"¿Tienen algo el viernes?\"\n\n"
-        "¿Cómo te puedo ayudar?"
-    )
+    return business_config.saludo_bienvenida(nombre_cliente)
 
 
 def build_available_slots_message(fecha_legible: str, slots: list[str]) -> str:
@@ -149,7 +143,7 @@ def build_confirmation_message(fecha_legible: str, hora: str, nombre_cliente: st
         f"✅ ¡Listo! {nombre_texto} cita quedó confirmada:\n\n"
         f"📅 {fecha_legible}\n"
         f"🕐 {hora}\n\n"
-        "Si necesitas cambiarla o cancelarla, solo escríbeme."
+        f"{business_config.despedida_confirmacion()}"
     )
 
 

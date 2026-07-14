@@ -20,6 +20,8 @@ from zoneinfo import ZoneInfo
 
 import anthropic
 
+import business_config
+
 logger = logging.getLogger("nlu_service")
 
 # ---------------------------------------------------------------------------
@@ -83,8 +85,12 @@ def _build_system_prompt(today: date) -> str:
     dias_semana = ["lunes", "martes", "miércoles", "jueves", "viernes", "sábado", "domingo"]
     hoy_texto = f"{dias_semana[today.weekday()]} {today.isoformat()}"
 
-    return f"""Eres el motor de interpretación de un chatbot de citas por WhatsApp.
-Tu única tarea es leer el mensaje del cliente y devolver ÚNICAMENTE un
+    return f"""{business_config.TONE_INSTRUCTIONS}
+
+---
+
+Además de tu papel como asistente, tu tarea AHORA es actuar como motor
+de interpretación: lee el mensaje del cliente y devuelve ÚNICAMENTE un
 objeto JSON válido, sin texto adicional, sin explicaciones, sin backticks
 de markdown.
 
