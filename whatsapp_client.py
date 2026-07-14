@@ -102,10 +102,15 @@ def send_whatsapp_message(to_number: str, body: str) -> bool:
 # de WhatsApp sin registrar plantillas de "Content API" previamente
 # (trámite adicional con Meta). Para mantener el setup simple, usamos
 # texto plano bien formateado + la capa de NLU (nlu_service.py) para
-# interpretar la respuesta del cliente en lenguaje natural, ej.
-# "la de las 10:15" o "la segunda". Si más adelante registras plantillas
-# de Content API, estas funciones se pueden reemplazar por mensajes
-# interactivos reales sin tocar el resto del sistema.
+# interpretar la respuesta del cliente en lenguaje natural.
+#
+# Para que el bot no suene robótico, varias funciones eligen una variante
+# al azar entre frases equivalentes — así dos conversaciones (o dos
+# momentos de la misma) no suenan idénticas, como pasaría con un
+# contestador automático.
+
+import random
+
 
 def build_greeting_message(nombre_cliente: str | None = None) -> str:
     """Mensaje de bienvenida cuando el cliente solo saluda."""
@@ -121,26 +126,37 @@ def build_available_slots_message(fecha_legible: str, slots: list[str]) -> str:
         slots: lista de horas "HH:MM" devuelta por rules_engine.generate_available_slots.
     """
     if not slots:
-        return (
-            f"Lo siento, no tengo horarios disponibles para {fecha_legible}. 😕\n"
-            "¿Quieres que busquemos otro día?"
-        )
+        return random.choice([
+            f"Ay, qué pena — para {fecha_legible} ya no me quedan espacios. 😕 "
+            "¿Buscamos otro día que te acomode?",
+            f"Para {fecha_legible} ya está todo ocupado. 😕 "
+            "Pero con gusto te busco espacio otro día, ¿cuál te queda bien?",
+        ])
 
-    lineas = [f"  {i + 1}. {hora}" for i, hora in enumerate(slots)]
+    lineas = [f"  🕐 {hora}" for hora in slots]
     horarios_texto = "\n".join(lineas)
 
+    intro = random.choice([
+        f"¡Claro! Para {fecha_legible} tengo estos espacios:",
+        f"Para {fecha_legible} me quedan estos horarios:",
+        f"Estos son los espacios que tengo para {fecha_legible}:",
+    ])
+
     return (
-        f"Estos son los horarios disponibles para {fecha_legible}:\n\n"
+        f"{intro}\n\n"
         f"{horarios_texto}\n\n"
-        "Solo dime la hora que prefieras (ej.\"10:15\")."
+        "¿Cuál te acomoda mejor?"
     )
 
 
 def build_confirmation_message(fecha_legible: str, hora: str, nombre_cliente: str | None = None) -> str:
     """Mensaje de confirmación tras crear la cita en Google Calendar."""
-    nombre_texto = f"{nombre_cliente}, tu" if nombre_cliente else "Tu"
+    encabezado = random.choice([
+        f"✅ ¡Listo{', ' + nombre_cliente if nombre_cliente else ''}! Tu cita quedó agendada:",
+        f"✅ ¡Quedó{', ' + nombre_cliente if nombre_cliente else ''}! Aquí está tu cita:",
+    ])
     return (
-        f"✅ ¡Listo! {nombre_texto} cita quedó confirmada:\n\n"
+        f"{encabezado}\n\n"
         f"📅 {fecha_legible}\n"
         f"🕐 {hora}\n\n"
         f"{business_config.despedida_confirmacion()}"
@@ -150,9 +166,10 @@ def build_confirmation_message(fecha_legible: str, hora: str, nombre_cliente: st
 def build_no_appointments_message() -> str:
     """Cuando el cliente pide cancelar/reprogramar pero no tiene citas registradas."""
     return (
-        "No encontré ninguna cita activa a tu nombre con este número. 🤔\n"
-        "Te recordamos que solo podemos ver las citas agendadas con este número de WhatsApp. \n"
-        "Si crees que es un error, contáctanos directamente."
+        "Mmm, no encuentro ninguna cita activa con este número. 🤔\n\n"
+        "Toma en cuenta que solo puedo ver las citas que se agendaron "
+        "desde este mismo WhatsApp. Si crees que es un error, "
+        "contáctanos directamente y lo revisamos."
     )
 
 
@@ -166,27 +183,42 @@ def build_appointment_selection_message(citas_legibles: list[str]) -> str:
                          ["viernes 18 de julio a las 10:15", ...]
     """
     lineas = [f"  {i + 1}. {cita}" for i, cita in enumerate(citas_legibles)]
-    return "Tienes varias citas registradas:\n\n" + "\n".join(lineas) + "\n\n¿Cuál te refieres? (dime el número)"
+    return (
+        "Veo que tienes más de una cita agendada:\n\n"
+        + "\n".join(lineas)
+        + "\n\n¿De cuál hablamos? Con el número me basta. 🙂"
+    )
 
 
 def build_cancel_confirm_prompt(cita_legible: str) -> str:
     """Pide confirmación antes de cancelar definitivamente una cita."""
-    return f"Tienes una cita el {cita_legible}. ¿Confirmas que quieres cancelarla? (sí/no)"
+    return (
+        f"Encontré tu cita del {cita_legible}.\n\n"
+        "¿Seguro que quieres cancelarla?"
+    )
 
 
 def build_cancel_success_message() -> str:
-    return "✅ Tu cita fue cancelada correctamente. Si quieres agendar otra, mandame mensaje."
+    return random.choice([
+        "✅ Listo, tu cita quedó cancelada. Cuando quieras agendar otra, "
+        "solo mándame un mensaje. 🙂",
+        "✅ Ya quedó cancelada. Si más adelante quieres reagendar, "
+        "aquí me encuentras. 🙂",
+    ])
 
 
 def build_cancel_aborted_message() -> str:
-    return "Entendido, tu cita se mantiene sin cambios. 🙂"
+    return random.choice([
+        "Perfecto, tu cita sigue en pie tal como estaba. 🙂",
+        "De acuerdo, no le movemos nada — tu cita queda igual. 🙂",
+    ])
 
 
 def build_reschedule_prompt(cita_legible: str) -> str:
     """Pide la nueva fecha/hora una vez identificada la cita a reprogramar."""
     return (
-        f"Tu cita actual es el {cita_legible}. "
-        "¿Para qué nuevo día y hora te gustaría moverla?"
+        f"Tu cita actual es el {cita_legible}.\n\n"
+        "¿Para qué día te gustaría moverla?"
     )
 
 
@@ -197,33 +229,36 @@ def build_ask_confirm_appointment_message(fecha_legible: str, hora: str) -> str:
     evitamos que un tap accidental o una mala elección llegue hasta el
     final del flujo.
     """
-    return (
-        f"Perfecto, la cita quedaría el {fecha_legible} a las {hora}. 📅\n\n"
-        "¿Es correcto? (responde \"sí\" o \"no\")"
-    )
+    return random.choice([
+        f"Va, entonces quedaría el {fecha_legible} a las {hora}. 📅 ¿Está bien así?",
+        f"Entonces la cita sería el {fecha_legible} a las {hora}. 📅 ¿Te parece bien?",
+    ])
 
 
 def build_ask_name_message(fecha_legible: str, hora: str) -> str:
-    """Después de que el cliente elige un horario, le pedimos su nombre."""
-    return (
-        f"Perfecto, {fecha_legible} a las {hora}. 📌\n\n"
-        "¿A nombre de quién agendo la cita?"
-    )
+    """Después de confirmar fecha y hora, le pedimos su nombre."""
+    return random.choice([
+        "¡Excelente! ¿A nombre de quién agendo la cita?",
+        "¡Perfecto! ¿Me compartes el nombre de la persona que asistirá?",
+    ])
 
 
 def build_ask_description_message() -> str:
     """Después del nombre, le pedimos una breve descripción de la cita."""
-    return (
-        "¡Gracias! Una última cosa: ¿me podrías dar una breve descripción "
-        "del motivo de la cita? (ej. \"consulta general\", \"revisión de resultados\")"
-    )
+    return random.choice([
+        "Gracias 🙂 Por último, ¿cuál es el motivo de la consulta? "
+        "Con algo breve me basta — por ejemplo \"revisión de resultados\" "
+        "o \"primera consulta\".",
+        "¡Gracias! Ya para terminar, cuéntame brevemente el motivo de la "
+        "consulta (ej. \"consulta general\", \"revisión de estudios\").",
+    ])
 
 
 def build_error_message() -> str:
     """Mensaje genérico y amable cuando algo falla internamente."""
     return (
-        "Ups, tuve un problema para procesar tu solicitud. 🙏\n"
-        "¿Podrías intentarlo de nuevo en un momento?"
+        "Uy, algo falló de mi lado. 🙏 ¿Me lo repites en un momentito? "
+        "Si sigue sin funcionar, márcanos directamente y con gusto te atendemos."
     )
 
 

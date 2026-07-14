@@ -240,13 +240,18 @@ def _mensaje_parece_fecha(texto: str) -> bool:
 
 def _match_slot_selection(message: str, slots_ofrecidos: list[str]) -> str | None:
     """
-    Cuando ya le mostramos al cliente una lista numerada de horarios,
+    Cuando ya le mostramos al cliente los horarios disponibles,
     intentamos hacer match con su respuesta sin volver a llamar a Claude
     (ahorra costo y latencia para el caso más común).
 
-    Acepta:
-      - Número de lista: "1", "la 1", "la primera", "opción 1"
-      - Hora exacta: "10:15", "9:00", "a las 9", "9am", "2pm"
+    Acepta horas en lenguaje natural: "10:15", "9:00", "a las 5",
+    "5pm", "17:00", "la de las 6", etc.
+
+    Como la lista mostrada ya no lleva números, los dígitos sueltos se
+    interpretan como HORAS, no como índices. Y dado que el paciente rara
+    vez aclara am/pm, para cada hora extraída probamos también su
+    variante +12h ("5" -> 05:00 y 17:00) y nos quedamos con la que
+    exista en los slots ofrecidos.
 
     Devuelve la hora "HH:MM" seleccionada, o None si no hubo match claro.
 
@@ -262,32 +267,24 @@ def _match_slot_selection(message: str, slots_ofrecidos: list[str]) -> str | Non
     if _mensaje_parece_fecha(texto):
         return None
 
-    # Números solos ("9", "12") son ambiguos: pueden ser "opción N" de la
-    # lista o una hora "N:00". Preferimos interpretarlos como opción de
-    # lista cuando ese número existe en el rango de slots ofrecidos,
-    # porque es lo que el cliente suele intentar tras leer la lista.
-    if texto.isdigit():
-        indice = int(texto) - 1
-        if 0 <= indice < len(slots_ofrecidos):
-            return slots_ofrecidos[indice]
-        # Si el número no calza con ninguna opción, lo dejamos pasar al
-        # extractor de horas más abajo (podría ser "9" queriendo decir 09:00).
-
-    # "la N" / "opción N" siempre se interpretan como número de lista.
-    # Usamos regex con límite de palabra para evitar que "la 25" haga match
-    # con "la 2" antes de llegar a "la 25".
-    for i, hora in enumerate(slots_ofrecidos):
-        numero = str(i + 1)
-        patron_opcion = re.compile(rf"\b(la|opción|opcion)\s+{numero}\b", re.IGNORECASE)
-        if patron_opcion.search(texto):
-            return hora
-
-    # Coincidencia por hora en lenguaje natural: extraemos todas las
-    # horas mencionadas y buscamos alguna que esté en los slots ofrecidos.
+    # Coincidencia por hora en lenguaje natural.
     horas_mencionadas = _extract_hours_from_message(texto)
     for hora_normalizada in horas_mencionadas:
         if hora_normalizada in slots_ofrecidos:
             return hora_normalizada
+
+        # Variante PM: "a las 5" -> probamos también 17:00. Solo aplica a
+        # horas "matutinas" sin meridiano explícito (si el paciente
+        # escribió "5pm" o "17:00", _extract_hours ya lo resolvió).
+        try:
+            hh, mm = hora_normalizada.split(":")
+            hh_int = int(hh)
+            if hh_int < 12:
+                variante_pm = f"{hh_int + 12:02d}:{mm}"
+                if variante_pm in slots_ofrecidos:
+                    return variante_pm
+        except ValueError:
+            pass
 
     return None
 
@@ -402,9 +399,8 @@ def _procesar_solicitud_de_fecha(phone_number: str, state: dict, fecha_str: str 
             fecha_str = fecha_previa.isoformat()
         else:
             pregunta_fecha = (
-                "¿Para qué día te gustaría la cita? Solo dime el día y el "
-                "mes para no confundirnos (ej. \"el 15 de julio\" o \"el "
-                "próximo miércoles\")."
+                "¿Qué día te gustaría venir? Puedes decirme algo como "
+                "\"el 15 de julio\", \"el próximo miércoles\" o \"el sábado\". 🙂"
             )
             if es_primera_interaccion:
                 # Le anteponemos el agradecimiento para que la respuesta
@@ -417,7 +413,7 @@ def _procesar_solicitud_de_fecha(phone_number: str, state: dict, fecha_str: str 
         fecha = date.fromisoformat(fecha_str)
     except ValueError:
         logger.warning("Fecha inválida devuelta por NLU: %s", fecha_str)
-        return "No logré entender bien la fecha, ¿podrías decírmela de otra forma?"
+        return "Perdón, no me quedó clara la fecha. 😅 ¿Me la repites? Por ejemplo \"el 20 de julio\" o \"el próximo martes\"."
 
     try:
         eventos_ocupados = calendar_service.get_busy_events(fecha)
@@ -468,9 +464,9 @@ def _despachar_intencion(phone_number: str, state: dict, resultado_nlu: dict, pr
 
     # intencion == "otro"
     return (
-        "No estoy seguro de haber entendido. Puedo ayudarte a agendar, cancelar "
-        "o reprogramar una cita — solo dime, por ejemplo, \"quiero una cita el "
-        "jueves por la mañana\"."
+        "Perdón, creo que no te entendí bien. 😅 Puedo ayudarte a agendar, "
+        "cancelar o reprogramar citas con la doctora. Por ejemplo, dime "
+        "\"quiero una cita el jueves\" y de ahí nos vamos. 🙂"
     )
 
 
@@ -542,8 +538,8 @@ def handle_incoming_message(phone_number: str, message_body: str, profile_name: 
                 return whatsapp_client.build_ask_confirm_appointment_message(fecha_legible, hora_elegida)
 
             mensaje_aclaracion = (
-                "No logré identificar el horario. ¿Podrías decirme el número "
-                "de la lista o la hora exacta? (ej. \"2\" o \"10:15\")"
+                "Perdón, no me quedó claro el horario. 😅 "
+                "Dime la hora tal cual, por ejemplo \"a las 5\" o \"17:30\"."
             )
             return _fallback_reinterpretar(phone_number, state, message_body, profile_name, mensaje_aclaracion)
 
@@ -552,8 +548,8 @@ def handle_incoming_message(phone_number: str, message_body: str, profile_name: 
 
             if confirmacion is None:
                 mensaje_aclaracion = (
-                    "¿La fecha y hora te parecen bien? Responde \"sí\" para "
-                    "continuar o \"no\" para elegir otro horario."
+                    "¿Entonces sí dejamos esa fecha y hora? Con un \"sí\" "
+                    "continuamos, o dime si prefieres otro horario."
                 )
                 return _fallback_reinterpretar(phone_number, state, message_body, profile_name, mensaje_aclaracion)
 
@@ -564,8 +560,7 @@ def handle_incoming_message(phone_number: str, message_body: str, profile_name: 
                 state["hora_pendiente"] = None
                 fecha_legible = _format_fecha_legible(state["fecha"])
                 return (
-                    "Entendido, aquí están de nuevo los horarios disponibles. "
-                    "Dime cuál prefieres.\n\n"
+                    "Sin problema, va de nuevo la lista. 🙂\n\n"
                     + whatsapp_client.build_available_slots_message(fecha_legible, state["slots_ofrecidos"])
                 )
 
@@ -580,7 +575,7 @@ def handle_incoming_message(phone_number: str, message_body: str, profile_name: 
             # poco de limpieza básica.
             nombre = _extraer_nombre(message_body)
             if not nombre:
-                return "¿Me podrías decir el nombre completo de la persona para la cita?"
+                return "¿Me compartes el nombre de la persona que asistirá a la cita? 🙂"
 
             state["nombre_cliente"] = nombre
             state["stage"] = "esperando_descripcion"
@@ -589,7 +584,7 @@ def handle_incoming_message(phone_number: str, message_body: str, profile_name: 
         if stage == "esperando_descripcion":
             descripcion = message_body.strip()
             if not descripcion:
-                return "¿Me podrías dar una breve descripción del motivo de la cita?"
+                return "Cuéntame brevemente el motivo de la consulta, porfa. 🙂"
 
             # Ya tenemos todo lo necesario: creamos la cita en Google Calendar.
             state["descripcion_cita"] = descripcion
@@ -619,14 +614,14 @@ def handle_incoming_message(phone_number: str, message_body: str, profile_name: 
             if cita_elegida:
                 return _avanzar_con_cita_elegida(state, cita_elegida, state["accion_pendiente"])
 
-            mensaje_aclaracion = "No logré identificar cuál cita. ¿Podrías decirme el número de la lista?"
+            mensaje_aclaracion = "Perdón, no me quedó claro de cuál cita hablamos. ¿Me dices el número de la lista? 🙂"
             return _fallback_reinterpretar(phone_number, state, message_body, profile_name, mensaje_aclaracion)
 
         if stage == "esperando_confirmacion_cancelacion":
             confirmacion = _parse_si_no(message_body)
 
             if confirmacion is None:
-                mensaje_aclaracion = "¿Confirmas que quieres cancelar esa cita? Responde \"sí\" o \"no\"."
+                mensaje_aclaracion = "Solo para confirmar: ¿sí cancelamos esa cita?"
                 return _fallback_reinterpretar(phone_number, state, message_body, profile_name, mensaje_aclaracion)
 
             evento = state["evento_objetivo"]
@@ -651,13 +646,13 @@ def handle_incoming_message(phone_number: str, message_body: str, profile_name: 
             fecha_str = resultado_nlu.get("fecha")
 
             if not fecha_str:
-                return "¿Para qué día te gustaría moverla? Dime el día y el mes (ej. \"el 21 de julio\")."
+                return "¿Para qué día la movemos? Dime el día y el mes, por ejemplo \"el 21 de julio\". 🙂"
 
             try:
                 nueva_fecha = date.fromisoformat(fecha_str)
             except ValueError:
                 logger.warning("Fecha inválida devuelta por NLU al reprogramar: %s", fecha_str)
-                return "No logré entender bien la fecha, ¿podrías decírmela de otra forma?"
+                return "Perdón, no me quedó clara la fecha. 😅 ¿Me la repites? Por ejemplo \"el 20 de julio\" o \"el próximo martes\"."
 
             evento_actual = state["evento_objetivo"]
             try:
@@ -702,8 +697,8 @@ def handle_incoming_message(phone_number: str, message_body: str, profile_name: 
                 return whatsapp_client.build_confirmation_message(fecha_legible, hora_elegida, nombre)
 
             mensaje_aclaracion = (
-                "No logré identificar el horario. ¿Podrías decirme el número "
-                "de la lista o la hora exacta? (ej. \"2\" o \"10:15\")"
+                "Perdón, no me quedó claro el horario. 😅 "
+                "Dime la hora tal cual, por ejemplo \"a las 5\" o \"17:30\"."
             )
             return _fallback_reinterpretar(phone_number, state, message_body, profile_name, mensaje_aclaracion)
 
