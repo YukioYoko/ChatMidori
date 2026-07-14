@@ -132,7 +132,7 @@ def build_available_slots_message(fecha_legible: str, slots: list[str]) -> str:
     return (
         f"Estos son los horarios disponibles para {fecha_legible}:\n\n"
         f"{horarios_texto}\n\n"
-        "Solo dime el número o la hora que prefieras (ej. \"la 3\" o \"10:15\")."
+        "Solo dime la hora que prefieras (ej.\"10:15\")."
     )
 
 
@@ -151,6 +151,7 @@ def build_no_appointments_message() -> str:
     """Cuando el cliente pide cancelar/reprogramar pero no tiene citas registradas."""
     return (
         "No encontré ninguna cita activa a tu nombre con este número. 🤔\n"
+        "Te recordamos que solo podemos ver las citas agendadas con este número de WhatsApp. \n"
         "Si crees que es un error, contáctanos directamente."
     )
 
@@ -174,7 +175,7 @@ def build_cancel_confirm_prompt(cita_legible: str) -> str:
 
 
 def build_cancel_success_message() -> str:
-    return "✅ Tu cita fue cancelada correctamente. Si quieres agendar otra, aquí estoy."
+    return "✅ Tu cita fue cancelada correctamente. Si quieres agendar otra, mandame mensaje."
 
 
 def build_cancel_aborted_message() -> str:

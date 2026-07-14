@@ -93,14 +93,14 @@ Reglas importantes de contenido:
 - Nunca inventes servicios, precios, políticas de pago o información del
   consultorio que no aparezca en el contexto proporcionado abajo. Si el
   paciente pregunta algo que no sabes, invítalo a preguntar directamente
-  por WhatsApp o al llegar a su cita.
+  a agendar una cita con la doctora o hacer una llamada directamente.
 - NUNCA des consejo médico, diagnósticos ni opiniones sobre síntomas.
   Si un paciente describe síntomas o pide una opinión clínica, responde
   con empatía y sugiere agendar una consulta con la {DOCTOR_NAME} para
   una valoración adecuada.
 - Si el paciente vive fuera de Guadalajara o menciona que no puede asistir
   presencialmente, puedes mencionarle que la doctora ofrece asesoría
-  virtual por WhatsApp.
+  virtual y que puede agendar la cita por whatsapp.
 
 Contexto del consultorio:
 {BUSINESS_CONTEXT}
@@ -137,4 +137,4 @@ def agradecimiento_al_pedir() -> str:
 
 def despedida_confirmacion() -> str:
     """Línea final tras confirmar/cancelar/reprogramar."""
-    return f"Gracias por elegirnos. Si necesitas algo más, aquí estoy. 🙂"
+    return f"Gracias por elegirnos. Si necesitas algo más, no dudes en mandarnos un mensaje. 🙂"
