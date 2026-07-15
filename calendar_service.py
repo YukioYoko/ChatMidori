@@ -284,10 +284,15 @@ def get_events_for_date(target_date: date) -> list[dict]:
 # CREACIÓN DE CITAS
 # ---------------------------------------------------------------------------
 
+PENDING_PAYMENT_TAG = "[PENDIENTE PAGO]"
+_PATRON_FECHA_LIMITE = re.compile(r"Pagar antes de:\s*(\d{4}-\d{2}-\d{2}T\d{2}:\d{2})")
+
+
 def create_appointment(target_date: date, start_time_str: str, client_name: str,
-                       phone_number: str, description: str | None = None) -> dict:
+                       phone_number: str, description: str | None = None,
+                       payment_deadline: datetime | None = None) -> dict:
     """
-    Inserta una nueva cita de 1 hora en Google Calendar.
+    Inserta una nueva cita de 30 minutos en Google Calendar.
 
     Args:
         target_date: fecha de la cita.
@@ -297,6 +302,13 @@ def create_appointment(target_date: date, start_time_str: str, client_name: str,
         phone_number: número de WhatsApp del cliente (se guarda visible
                        en la descripción del evento).
         description: motivo o descripción de la cita que dio el cliente.
+        payment_deadline: si se especifica, la cita se crea como PENDIENTE
+                       DE PAGO — el título lleva el prefijo [PENDIENTE PAGO]
+                       y la descripción incluye la fecha límite para pagar.
+                       Para confirmarla, la doctora quita el prefijo del
+                       título manualmente en Google Calendar al recibir el
+                       depósito. Si la fecha límite pasa sin confirmación,
+                       el job de expiración la cancela automáticamente.
 
     Returns:
         dict con al menos {"id": str, "htmlLink": str} del evento creado.
@@ -321,11 +333,23 @@ def create_appointment(target_date: date, start_time_str: str, client_name: str,
     ]
     if description:
         lineas_descripcion.append(f"📝 Motivo: {description}")
+    if payment_deadline is not None:
+        lineas_descripcion.append(
+            f"⏳ Pagar antes de: {payment_deadline.strftime('%Y-%m-%dT%H:%M')}"
+        )
+        lineas_descripcion.append(
+            "💡 Para confirmar la cita: quita \"[PENDIENTE PAGO]\" del título "
+            "cuando recibas el depósito."
+        )
     lineas_descripcion.append("")
     lineas_descripcion.append("Agendado automáticamente vía WhatsApp Bot.")
 
+    titulo = f"Cita - {client_name}"
+    if payment_deadline is not None:
+        titulo = f"{PENDING_PAYMENT_TAG} {titulo}"
+
     event_body = {
-        "summary": f"Cita - {client_name}",
+        "summary": titulo,
         "description": "\n".join(lineas_descripcion),
         "start": {"dateTime": start_dt.isoformat(), "timeZone": TIMEZONE_NAME},
         "end": {"dateTime": end_dt.isoformat(), "timeZone": TIMEZONE_NAME},
@@ -340,6 +364,59 @@ def create_appointment(target_date: date, start_time_str: str, client_name: str,
 
     logger.info("Cita creada correctamente: %s", created_event.get("htmlLink"))
     return created_event
+
+
+def find_expired_pending_appointments() -> list[dict]:
+    """
+    Busca citas futuras que siguen marcadas como [PENDIENTE PAGO] y cuya
+    fecha límite de pago ya venció. El job de expiración (reminders.py)
+    las cancela.
+
+    Returns:
+        Lista de dicts {id, start, end, summary, description, telefono,
+        nombre, fecha_limite}.
+    """
+    now = datetime.now(TIMEZONE)
+
+    try:
+        service = _get_service()
+        response = (
+            service.events()
+            .list(
+                calendarId=CALENDAR_ID,
+                timeMin=now.isoformat(),
+                q=PENDING_PAYMENT_TAG,
+                singleEvents=True,
+                orderBy="startTime",
+                maxResults=50,
+            )
+            .execute()
+        )
+    except HttpError as error:
+        logger.error("Error al buscar citas pendientes de pago: %s", error)
+        raise
+
+    vencidas = []
+    for event in response.get("items", []):
+        parsed = _parse_event(event)
+        if parsed is None or PENDING_PAYMENT_TAG not in parsed.get("summary", ""):
+            continue
+
+        match = _PATRON_FECHA_LIMITE.search(parsed.get("description", ""))
+        if not match:
+            logger.warning("Cita pendiente sin fecha límite parseable: %s", parsed.get("id"))
+            continue
+
+        fecha_limite = datetime.fromisoformat(match.group(1)).replace(tzinfo=TIMEZONE)
+        if now > fecha_limite:
+            vencidas.append({
+                **parsed,
+                "telefono": _extraer_telefono(parsed),
+                "nombre": _extraer_nombre_de_summary(parsed),
+                "fecha_limite": fecha_limite,
+            })
+
+    return vencidas
 
 
 # ---------------------------------------------------------------------------

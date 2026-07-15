@@ -22,15 +22,51 @@ mover CONVERSATIONS a Redis o SQLite.
 
 import logging
 import re
-from datetime import date, datetime
+from datetime import date, datetime, time, timedelta
+from zoneinfo import ZoneInfo
 
 import calendar_service
 import rules_engine
 import nlu_service
 import whatsapp_client
 import business_config
+import blacklist
 
 logger = logging.getLogger("conversation_manager")
+
+TIMEZONE = ZoneInfo("America/Mexico_City")
+
+
+def _calcular_fecha_limite_pago(inicio_cita: datetime) -> datetime:
+    """
+    Calcula la fecha límite para pagar el depósito: N días hábiles
+    (lunes a viernes) a partir de hoy, al final del día (23:59).
+
+    Si la cita es ANTES de esa fecha límite (ej. el paciente agendó para
+    mañana), la fecha límite se recorta al inicio de la cita — no tiene
+    sentido darle plazo de pago posterior a la cita misma.
+    """
+    limite = datetime.now(TIMEZONE)
+    dias_habiles_agregados = 0
+    while dias_habiles_agregados < business_config.DEPOSIT_DEADLINE_BUSINESS_DAYS:
+        limite += timedelta(days=1)
+        if limite.weekday() < 5:  # lunes=0 ... viernes=4
+            dias_habiles_agregados += 1
+    limite = limite.replace(hour=23, minute=59, second=0, microsecond=0)
+
+    return min(limite, inicio_cita)
+
+
+def _requiere_deposito(phone_number: str) -> bool:
+    """
+    Decide si este paciente debe depositar para confirmar su cita:
+    - Siempre, si la política de depósito obligatorio está activa
+      (rama "deposito-obligatorio").
+    - Solo si está en la lista negra, en caso contrario (rama main).
+    """
+    if business_config.DEPOSIT_REQUIRED_FOR_ALL:
+        return True
+    return blacklist.is_blacklisted(phone_number)
 
 # ---------------------------------------------------------------------------
 # ESTADO EN MEMORIA
@@ -586,27 +622,54 @@ def handle_incoming_message(phone_number: str, message_body: str, profile_name: 
             if not descripcion:
                 return "Cuéntame brevemente el motivo de la consulta, porfa. 🙂"
 
-            # Ya tenemos todo lo necesario: creamos la cita en Google Calendar.
             state["descripcion_cita"] = descripcion
+            fecha_legible = _format_fecha_legible(state["fecha"])
+            hora = state["hora_pendiente"]
+            nombre = state["nombre_cliente"]
+
+            # ¿Este paciente debe depositar para confirmar? (lista negra,
+            # o todos si la política de depósito obligatorio está activa)
+            deposito = _requiere_deposito(phone_number)
+            fecha_limite = None
+            if deposito:
+                hh, mm = map(int, hora.split(":"))
+                inicio_cita = datetime(
+                    state["fecha"].year, state["fecha"].month, state["fecha"].day,
+                    hh, mm, tzinfo=TIMEZONE,
+                )
+                fecha_limite = _calcular_fecha_limite_pago(inicio_cita)
+
             try:
                 evento = calendar_service.create_appointment(
                     target_date=state["fecha"],
-                    start_time_str=state["hora_pendiente"],
-                    client_name=state["nombre_cliente"],
+                    start_time_str=hora,
+                    client_name=nombre,
                     phone_number=phone_number,
                     description=descripcion,
+                    payment_deadline=fecha_limite,
                 )
             except Exception as exc:
                 logger.error("Fallo al crear la cita para %s: %s", phone_number, exc)
                 return whatsapp_client.build_error_message()
 
-            fecha_legible = _format_fecha_legible(state["fecha"])
-            hora = state["hora_pendiente"]
-            nombre = state["nombre_cliente"]
             _reset_state(phone_number)
             # Preservamos el nombre para conversaciones futuras.
             CONVERSATIONS[phone_number]["nombre_cliente"] = nombre
             logger.info("Cita creada para %s: %s", phone_number, evento.get("htmlLink"))
+
+            if deposito:
+                fecha_limite_legible = (
+                    f"{_format_fecha_legible(fecha_limite.date())} a las "
+                    f"{fecha_limite.strftime('%H:%M')}"
+                )
+                return whatsapp_client.build_deposit_required_message(
+                    fecha_legible=fecha_legible,
+                    hora=hora,
+                    monto_mxn=business_config.DEPOSIT_AMOUNT_MXN,
+                    instrucciones_pago=business_config.DEPOSIT_PAYMENT_INSTRUCTIONS,
+                    fecha_limite_legible=fecha_limite_legible,
+                )
+
             return whatsapp_client.build_confirmation_message(fecha_legible, hora, nombre)
 
         if stage == "esperando_seleccion_cita":

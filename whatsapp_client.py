@@ -330,6 +330,26 @@ def build_ask_description_message() -> str:
     ])
 
 
+def build_deposit_required_message(fecha_legible: str, hora: str, monto_mxn: int,
+                                    instrucciones_pago: str, fecha_limite_legible: str) -> str:
+    """
+    Mensaje cuando la cita queda apartada pero requiere un depósito para
+    confirmarse (paciente en lista negra, o todos si la política de
+    depósito obligatorio está activa).
+    """
+    return (
+        f"📌 Tu cita del {fecha_legible} a las {hora} quedó *apartada*.\n\n"
+        f"Para confirmarla, te pedimos un depósito de *${monto_mxn} MXN* "
+        f"(se descuenta del costo de tu consulta):\n\n"
+        f"{instrucciones_pago}\n\n"
+        f"⏳ Tienes hasta el *{fecha_limite_legible}* para realizarlo. "
+        "Cuando lo hagas, mándanos tu comprobante por este mismo chat y "
+        "nosotros confirmamos tu cita. 🙂\n\n"
+        "Si no recibimos el depósito antes de la fecha límite, el espacio "
+        "se liberará automáticamente para otro paciente."
+    )
+
+
 def build_error_message() -> str:
     """Mensaje genérico y amable cuando algo falla internamente."""
     return (

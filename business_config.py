@@ -72,6 +72,35 @@ Contacto directo (por si el paciente lo pide):
 
 
 # ---------------------------------------------------------------------------
+# DEPÓSITO DE CONFIRMACIÓN (medida anti-plantones)
+# ---------------------------------------------------------------------------
+
+# Si es False (default en la rama main): el depósito solo se exige a los
+# números en la lista negra (blacklist.py) — pacientes que ya dejaron
+# plantada a la doctora antes.
+#
+# Si es True (rama "deposito-obligatorio"): TODOS los pacientes deben
+# depositar para confirmar su cita.
+DEPOSIT_REQUIRED_FOR_ALL = False
+
+# Monto del depósito para confirmar la cita. Ajústalo al porcentaje de
+# la consulta que quieras exigir por adelantado.
+DEPOSIT_AMOUNT_MXN = 200
+
+# Días hábiles (lunes a viernes) que tiene el paciente para pagar el
+# depósito antes de que su cita se cancele automáticamente.
+DEPOSIT_DEADLINE_BUSINESS_DAYS = 2
+
+# Datos para que el paciente haga la transferencia.
+# >>> REEMPLAZA con los datos bancarios reales del consultorio <<<
+DEPOSIT_PAYMENT_INSTRUCTIONS = """
+🏦 Banco: [NOMBRE DEL BANCO]
+💳 CLABE: [000000000000000000]
+👤 A nombre de: [NOMBRE DEL TITULAR]
+""".strip()
+
+
+# ---------------------------------------------------------------------------
 # TONO DEL ASISTENTE
 # ---------------------------------------------------------------------------
 

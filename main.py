@@ -37,6 +37,7 @@ from apscheduler.schedulers.background import BackgroundScheduler
 import whatsapp_client
 import conversation_manager
 import reminders
+import blacklist
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 logger = logging.getLogger("main")
@@ -79,8 +80,16 @@ if REMINDER_SCHEDULER_ENABLED:
         minute=0,
         id="recordatorios_diarios",
     )
+    # Expiración de citas apartadas sin pagar: se revisa cada hora, así
+    # el espacio se libera pronto cuando vence el plazo del depósito.
+    _scheduler.add_job(
+        reminders.cancelar_citas_sin_pago,
+        trigger="cron",
+        minute=15,
+        id="expiracion_citas_sin_pago",
+    )
     _scheduler.start()
-    logger.info("Scheduler de recordatorios activo: todos los días a las %02d:00", REMINDER_HOUR)
+    logger.info("Scheduler activo: recordatorios a las %02d:00, expiración de citas sin pago cada hora", REMINDER_HOUR)
 
 
 @app.get("/")
@@ -104,6 +113,74 @@ def trigger_reminders(x_reminder_secret: str | None = Header(default=None)):
 
     resultado = reminders.enviar_recordatorios_de_manana()
     return resultado
+
+
+# -----------------------------------------------------------------------
+# ADMINISTRACIÓN DE LA LISTA NEGRA
+#
+# Números de pacientes que dejaron plantada a la doctora. Para agendar de
+# nuevo, se les exige un depósito previo (ver conversation_manager.py).
+#
+# Protegidos con la variable de entorno ADMIN_SECRET, enviada en el
+# header X-Admin-Secret. Ejemplos con curl:
+#
+#   curl -X POST https://tu-bot.onrender.com/admin/blacklist \
+#        -H "X-Admin-Secret: TU_SECRETO" \
+#        -H "Content-Type: application/json" \
+#        -d '{"phone": "+5213312345678", "motivo": "No asistió el 10 de julio"}'
+#
+#   curl -X DELETE https://tu-bot.onrender.com/admin/blacklist/+5213312345678 \
+#        -H "X-Admin-Secret: TU_SECRETO"
+#
+# También puedes editar blacklist.json a mano si corres el bot en local.
+# -----------------------------------------------------------------------
+ADMIN_SECRET = os.environ.get("ADMIN_SECRET")
+
+
+def _verificar_admin(x_admin_secret: str | None):
+    if not ADMIN_SECRET:
+        raise HTTPException(
+            status_code=503,
+            detail="ADMIN_SECRET no está configurado; endpoints de administración deshabilitados.",
+        )
+    if x_admin_secret != ADMIN_SECRET:
+        raise HTTPException(status_code=403, detail="Secreto inválido")
+
+
+@app.get("/admin/blacklist")
+def listar_blacklist(x_admin_secret: str | None = Header(default=None)):
+    _verificar_admin(x_admin_secret)
+    return blacklist.list_all()
+
+
+@app.post("/admin/blacklist")
+async def agregar_a_blacklist(request: Request, x_admin_secret: str | None = Header(default=None)):
+    _verificar_admin(x_admin_secret)
+    body = await request.json()
+    phone = body.get("phone")
+    if not phone:
+        raise HTTPException(status_code=400, detail="Falta el campo 'phone'")
+    return blacklist.add(phone, body.get("motivo", ""))
+
+
+@app.delete("/admin/blacklist/{phone}")
+def quitar_de_blacklist(phone: str, x_admin_secret: str | None = Header(default=None)):
+    _verificar_admin(x_admin_secret)
+    if blacklist.remove(phone):
+        return {"removed": phone}
+    raise HTTPException(status_code=404, detail="Número no encontrado en la lista negra")
+
+
+@app.post("/tasks/expire-unpaid")
+def trigger_expiracion(x_reminder_secret: str | None = Header(default=None)):
+    """
+    Dispara manualmente la cancelación de citas sin pago vencidas.
+    Pensado para cron externo si el scheduler interno está desactivado.
+    Usa el mismo secreto que /tasks/send-reminders.
+    """
+    if REMINDER_SECRET and x_reminder_secret != REMINDER_SECRET:
+        raise HTTPException(status_code=403, detail="Secreto inválido")
+    return reminders.cancelar_citas_sin_pago()
 
 
 @app.post("/webhook/whatsapp")
