@@ -81,7 +81,7 @@ Contacto directo (por si el paciente lo pide):
 #
 # Si es True (rama "deposito-obligatorio"): TODOS los pacientes deben
 # depositar para confirmar su cita.
-DEPOSIT_REQUIRED_FOR_ALL = False
+DEPOSIT_REQUIRED_FOR_ALL = True
 
 # Monto del depósito para confirmar la cita. Ajústalo al porcentaje de
 # la consulta que quieras exigir por adelantado.
