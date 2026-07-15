@@ -229,12 +229,13 @@ def build_confirmation_message(fecha_legible: str, hora: str, nombre_cliente: st
     """Mensaje de confirmación tras crear la cita en Google Calendar."""
     encabezado = random.choice([
         f"✅ ¡Listo{', ' + nombre_cliente if nombre_cliente else ''}! Tu cita quedó agendada:",
-        f"✅ ¡Quedó{', ' + nombre_cliente if nombre_cliente else ''}! Aquí está tu cita:",
+        f"✅ ¡Muy bien{', ' + nombre_cliente if nombre_cliente else ''}! tu cita ya está agendada:",
     ])
     return (
         f"{encabezado}\n\n"
         f"📅 {fecha_legible}\n"
-        f"🕐 {hora}\n\n"
+        f"🕐 {hora}\n"
+        f"{business_config.bloque_ubicacion()}\n\n"
         f"{business_config.despedida_confirmacion()}"
     )
 
