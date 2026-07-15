@@ -662,6 +662,30 @@ def handle_incoming_message(phone_number: str, message_body: str, profile_name: 
                     f"{_format_fecha_legible(fecha_limite.date())} a las "
                     f"{fecha_limite.strftime('%H:%M')}"
                 )
+
+                # Intentamos generar un link de pago de Stripe (tarjeta/OXXO,
+                # confirmación automática). Si Stripe no está configurado o
+                # falla, caemos al modo de transferencia bancaria manual.
+                import payments
+                link = None
+                if payments.stripe_esta_configurado():
+                    link = payments.crear_link_de_pago(
+                        event_id=evento.get("id"),
+                        phone_number=phone_number,
+                        nombre=nombre,
+                        fecha_legible=fecha_legible,
+                        hora=hora,
+                    )
+
+                if link:
+                    return whatsapp_client.build_deposit_link_message(
+                        fecha_legible=fecha_legible,
+                        hora=hora,
+                        monto_mxn=business_config.DEPOSIT_AMOUNT_MXN,
+                        link_de_pago=link,
+                        fecha_limite_legible=fecha_limite_legible,
+                    )
+
                 return whatsapp_client.build_deposit_required_message(
                     fecha_legible=fecha_legible,
                     hora=hora,

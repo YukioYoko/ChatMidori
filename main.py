@@ -38,6 +38,8 @@ import whatsapp_client
 import conversation_manager
 import reminders
 import blacklist
+import payments
+import calendar_service
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 logger = logging.getLogger("main")
@@ -181,6 +183,65 @@ def trigger_expiracion(x_reminder_secret: str | None = Header(default=None)):
     if REMINDER_SECRET and x_reminder_secret != REMINDER_SECRET:
         raise HTTPException(status_code=403, detail="Secreto inválido")
     return reminders.cancelar_citas_sin_pago()
+
+
+# -----------------------------------------------------------------------
+# WEBHOOK DE STRIPE — confirmación automática al recibir el pago
+#
+# Configuración (ver STRIPE_SETUP.md):
+#   Stripe Dashboard -> Developers -> Webhooks -> Add endpoint
+#   URL: https://tu-bot.onrender.com/webhook/stripe
+#   Eventos: checkout.session.completed,
+#            checkout.session.async_payment_succeeded
+# -----------------------------------------------------------------------
+@app.post("/webhook/stripe")
+async def stripe_webhook(request: Request):
+    payload = await request.body()
+    signature = request.headers.get("stripe-signature", "")
+
+    try:
+        event = payments.verificar_webhook(payload, signature)
+    except Exception as exc:
+        logger.warning("Webhook de Stripe con firma inválida: %s", exc)
+        raise HTTPException(status_code=400, detail="Firma inválida")
+
+    datos = payments.procesar_evento_de_pago(event)
+    if datos is None:
+        # Evento que no nos interesa (ficha OXXO generada, pagos fallidos,
+        # etc.). Respondemos 200 para que Stripe no lo reintente.
+        return {"status": "ignored"}
+
+    # Confirmamos la cita en Google Calendar (quita [PENDIENTE PAGO]).
+    try:
+        calendar_service.confirm_appointment(datos["event_id"])
+    except Exception as exc:
+        # Caso raro pero posible: el pago llegó DESPUÉS de que el job de
+        # expiración canceló la cita (ej. pagó minutos después del plazo).
+        # Se loguea con nivel alto para que se resuelva a mano (reembolso
+        # o reagendar al paciente) — el dinero ya está en Stripe.
+        logger.error(
+            "PAGO RECIBIDO pero no se pudo confirmar la cita %s (¿ya expiró?): %s. "
+            "Revisar manualmente: contactar al paciente %s.",
+            datos["event_id"], exc, datos.get("phone_number"),
+        )
+        if datos.get("phone_number"):
+            whatsapp_client.send_whatsapp_message(
+                datos["phone_number"],
+                "Recibimos tu pago, pero tu cita había expirado por el plazo. 🙏 "
+                "No te preocupes: escríbenos y con gusto te reagendamos o "
+                "gestionamos tu reembolso.",
+            )
+        return {"status": "paid_but_expired"}
+
+    # Avisamos al paciente que su cita quedó confirmada.
+    if datos.get("phone_number"):
+        whatsapp_client.send_whatsapp_message(
+            datos["phone_number"],
+            whatsapp_client.build_payment_received_message(datos.get("nombre")),
+        )
+
+    logger.info("Cita %s confirmada automáticamente vía Stripe", datos["event_id"])
+    return {"status": "confirmed"}
 
 
 @app.post("/webhook/whatsapp")

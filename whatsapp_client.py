@@ -330,6 +330,37 @@ def build_ask_description_message() -> str:
     ])
 
 
+def build_deposit_link_message(fecha_legible: str, hora: str, monto_mxn: int,
+                                link_de_pago: str, fecha_limite_legible: str) -> str:
+    """
+    Mensaje cuando la cita queda apartada y el depósito se paga en línea
+    vía Stripe (tarjeta u OXXO). La confirmación es automática al pagar.
+    """
+    return (
+        f"📌 Tu cita del {fecha_legible} a las {hora} quedó *apartada*.\n\n"
+        f"Para confirmarla, realiza un depósito de *${monto_mxn} MXN* "
+        f"(se descuenta del costo de tu consulta). Puedes pagar con "
+        f"tarjeta o en OXXO desde este enlace seguro:\n\n"
+        f"👉 {link_de_pago}\n\n"
+        f"⏳ Tienes hasta el *{fecha_limite_legible}*. En cuanto se acredite "
+        "tu pago, te confirmamos automáticamente por este chat — no "
+        "necesitas mandar comprobante. 🙂\n\n"
+        "Si no recibimos el pago antes de la fecha límite, el espacio se "
+        "liberará para otro paciente."
+    )
+
+
+def build_payment_received_message(nombre: str | None = None) -> str:
+    """Confirmación automática cuando Stripe notifica que el pago entró."""
+    saludo = f"¡{nombre}, tu" if nombre else "¡Tu"
+    return (
+        f"✅ {saludo} pago fue recibido y tu cita quedó *confirmada*!\n\n"
+        "Te esperamos en el consultorio. Un día antes te mandaremos un "
+        "recordatorio. Si necesitas cambiar o cancelar tu cita, solo "
+        "escríbenos. 🙂"
+    )
+
+
 def build_deposit_required_message(fecha_legible: str, hora: str, monto_mxn: int,
                                     instrucciones_pago: str, fecha_limite_legible: str) -> str:
     """

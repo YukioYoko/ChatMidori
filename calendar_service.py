@@ -548,6 +548,47 @@ def delete_appointment(event_id: str) -> None:
     logger.info("Cita %s cancelada correctamente", event_id)
 
 
+def confirm_appointment(event_id: str) -> dict:
+    """
+    Confirma una cita apartada: quita el prefijo [PENDIENTE PAGO] del
+    título y anota en la descripción que el pago fue recibido.
+
+    La llama el webhook de Stripe (main.py) cuando entra el pago del
+    depósito — a partir de ese momento la cita es firme y el job de
+    expiración ya no la tocará.
+
+    Raises:
+        HttpError: si Google Calendar rechaza la operación (ej. el evento
+                   ya no existe porque venció y fue cancelado justo antes
+                   de que llegara el pago — main.py maneja ese caso).
+    """
+    try:
+        service = _get_service()
+        evento = service.events().get(calendarId=CALENDAR_ID, eventId=event_id).execute()
+    except HttpError as error:
+        logger.error("No se pudo leer el evento %s para confirmarlo: %s", event_id, error)
+        raise
+
+    titulo = evento.get("summary", "")
+    titulo_limpio = titulo.replace(f"{PENDING_PAYMENT_TAG} ", "").replace(PENDING_PAYMENT_TAG, "")
+
+    descripcion = evento.get("description", "")
+    descripcion += f"\n✅ Depósito recibido vía Stripe: {datetime.now(TIMEZONE).strftime('%Y-%m-%d %H:%M')}"
+
+    try:
+        actualizado = service.events().patch(
+            calendarId=CALENDAR_ID,
+            eventId=event_id,
+            body={"summary": titulo_limpio, "description": descripcion},
+        ).execute()
+    except HttpError as error:
+        logger.error("No se pudo confirmar el evento %s: %s", event_id, error)
+        raise
+
+    logger.info("Cita %s confirmada tras recibir el pago", event_id)
+    return actualizado
+
+
 # ---------------------------------------------------------------------------
 # PRUEBA RÁPIDA MANUAL (puedes borrar este bloque en producción)
 # ---------------------------------------------------------------------------
