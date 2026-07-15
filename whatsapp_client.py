@@ -366,13 +366,29 @@ def build_deposit_link_message(fecha_legible: str, hora: str, monto_mxn: int,
     )
 
 
-def build_payment_received_message(nombre: str | None = None) -> str:
-    """Confirmación automática cuando Stripe notifica que el pago entró."""
+def build_payment_received_message(nombre: str | None = None,
+                                    meet_link: str | None = None) -> str:
+    """
+    Confirmación automática cuando Stripe notifica que el pago entró.
+    Si meet_link viene (cita virtual), se incluye el enlace de la
+    videollamada en lugar de la dirección física.
+    """
     saludo = f"¡{nombre}, tu" if nombre else "¡Tu"
+
+    if meet_link:
+        lugar = (
+            f"💻 Modalidad: virtual (videollamada)\n"
+            f"🔗 Únete aquí el día de tu cita: {meet_link}"
+        )
+        cierre = "Te esperamos en la videollamada."
+    else:
+        lugar = business_config.bloque_ubicacion()
+        cierre = "Te esperamos en el consultorio."
+
     return (
         f"✅ {saludo} pago fue recibido y tu cita quedó *confirmada*!\n\n"
-        f"{business_config.bloque_ubicacion()}\n\n"
-        "Te esperamos en el consultorio. Un día antes te mandaremos un "
+        f"{lugar}\n\n"
+        f"{cierre} Un día antes te mandaremos un "
         "recordatorio. Si necesitas cambiar o cancelar tu cita, solo "
         "escríbenos. 🙂"
     )

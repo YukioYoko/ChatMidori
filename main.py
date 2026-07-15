@@ -213,7 +213,7 @@ async def stripe_webhook(request: Request):
 
     # Confirmamos la cita en Google Calendar (quita [PENDIENTE PAGO]).
     try:
-        calendar_service.confirm_appointment(datos["event_id"])
+        evento_confirmado = calendar_service.confirm_appointment(datos["event_id"])
     except Exception as exc:
         # Caso raro pero posible: el pago llegó DESPUÉS de que el job de
         # expiración canceló la cita (ej. pagó minutos después del plazo).
@@ -233,11 +233,15 @@ async def stripe_webhook(request: Request):
             )
         return {"status": "paid_but_expired"}
 
-    # Avisamos al paciente que su cita quedó confirmada.
+    # Avisamos al paciente que su cita quedó confirmada. Si la cita es
+    # virtual, el evento trae el link de Google Meet y se lo incluimos.
     if datos.get("phone_number"):
         whatsapp_client.send_whatsapp_message(
             datos["phone_number"],
-            whatsapp_client.build_payment_received_message(datos.get("nombre")),
+            whatsapp_client.build_payment_received_message(
+                datos.get("nombre"),
+                meet_link=evento_confirmado.get("hangoutLink"),
+            ),
         )
 
     logger.info("Cita %s confirmada automáticamente vía Stripe", datos["event_id"])
