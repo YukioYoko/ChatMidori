@@ -225,17 +225,32 @@ def build_available_slots_message(fecha_legible: str, slots: list[str]) -> str:
     )
 
 
-def build_confirmation_message(fecha_legible: str, hora: str, nombre_cliente: str | None = None) -> str:
-    """Mensaje de confirmación tras crear la cita en Google Calendar."""
+def build_confirmation_message(fecha_legible: str, hora: str, nombre_cliente: str | None = None,
+                                meet_link: str | None = None) -> str:
+    """
+    Mensaje de confirmación tras crear la cita en Google Calendar.
+
+    Si meet_link viene, la cita es virtual: se muestra el enlace de la
+    videollamada en lugar de la ubicación física del consultorio.
+    """
     encabezado = random.choice([
         f"✅ ¡Listo{', ' + nombre_cliente if nombre_cliente else ''}! Tu cita quedó agendada:",
         f"✅ ¡Muy bien{', ' + nombre_cliente if nombre_cliente else ''}! tu cita ya está agendada:",
     ])
+
+    if meet_link:
+        lugar = (
+            f"💻 Modalidad: virtual (videollamada)\n"
+            f"🔗 Únete aquí el día de tu cita: {meet_link}"
+        )
+    else:
+        lugar = business_config.bloque_ubicacion()
+
     return (
         f"{encabezado}\n\n"
         f"📅 {fecha_legible}\n"
         f"🕐 {hora}\n"
-        f"{business_config.bloque_ubicacion()}\n\n"
+        f"{lugar}\n\n"
         f"{business_config.despedida_confirmacion()}"
     )
 
