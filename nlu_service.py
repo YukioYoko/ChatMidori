@@ -131,6 +131,17 @@ natural del cliente, incluyendo errores de tipeo o acentos faltantes):
 - Nunca inventes una fecha u hora que el cliente no mencionó ni se pueda
   inferir razonablemente del texto.
 
+Regla de contexto (MUY importante):
+- Si se te proporciona el último mensaje del asistente, interpreta la
+  respuesta del paciente A LA LUZ de ese contexto. Ejemplos:
+  * Asistente ofreció "¿Te gustaría agendar una cita virtual?" y el
+    paciente responde "sí porfavor" -> intencion: "agendar_cita",
+    modalidad: "virtual".
+  * Asistente ofreció ayudar a agendar y el paciente responde "sí" ->
+    intencion: "agendar_cita".
+  * Asistente preguntó por el día y el paciente responde "el viernes" ->
+    intencion: "agendar_cita" con la fecha resuelta.
+
 Otras reglas importantes:
 - Usa "pregunta_informacion" cuando el paciente pregunta sobre el
   consultorio o la doctora: servicios, especialidad, ubicación, horarios,
@@ -148,7 +159,8 @@ Otras reglas importantes:
 # FUNCIÓN PRINCIPAL
 # ---------------------------------------------------------------------------
 
-def extract_intent(user_message: str, today: date | None = None) -> dict:
+def extract_intent(user_message: str, today: date | None = None,
+                   contexto_previo: str | None = None) -> dict:
     """
     Envía el mensaje del cliente a Claude Haiku 4.5 y devuelve un dict
     con la intención y los datos extraídos.
@@ -158,6 +170,10 @@ def extract_intent(user_message: str, today: date | None = None) -> dict:
         today: fecha de referencia para resolver expresiones relativas.
                Si no se especifica, se usa la fecha actual en
                America/Mexico_City. Parámetro útil también para pruebas.
+        contexto_previo: el último mensaje que el BOT le envió al
+               paciente. Fundamental para interpretar respuestas cortas
+               como "sí porfavor" — sin este contexto, un "sí" aislado
+               no significa nada y caería en intención "otro".
 
     Returns:
         dict con las claves: intencion, fecha, hora_preferida,
@@ -173,12 +189,24 @@ def extract_intent(user_message: str, today: date | None = None) -> dict:
 
     system_prompt = _build_system_prompt(today)
 
+    # Si tenemos el último mensaje del bot, lo incluimos como contexto
+    # para que respuestas cortas ("sí", "esa está bien", "porfa") se
+    # interpreten correctamente. Se recorta para controlar el costo.
+    if contexto_previo:
+        contenido = (
+            f"Último mensaje que el asistente le envió al paciente:\n"
+            f"«{contexto_previo[:500]}»\n\n"
+            f"Respuesta del paciente:\n«{user_message}»"
+        )
+    else:
+        contenido = user_message
+
     try:
         response = client.messages.create(
             model=MODEL_NAME,
             max_tokens=300,
             system=system_prompt,
-            messages=[{"role": "user", "content": user_message}],
+            messages=[{"role": "user", "content": contenido}],
         )
     except anthropic.APIError as exc:
         logger.error("Error de la API de Claude al interpretar el mensaje: %s", exc)

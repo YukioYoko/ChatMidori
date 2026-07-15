@@ -110,6 +110,7 @@ def _estado_vacio() -> dict:
         "evento_objetivo": None,
         "accion_pendiente": None,  # "cancelar" | "reprogramar", mientras se elige la cita
         "modalidad": None,          # "virtual" si el paciente la pidió explícitamente
+        "ultimo_mensaje_bot": None, # contexto para interpretar respuestas cortas
     }
 
 
@@ -529,7 +530,8 @@ def _fallback_reinterpretar(phone_number: str, state: dict, message_body: str,
     mismo punto de la conversación (sin resetear el estado) y repetimos
     la aclaración original.
     """
-    resultado_nlu = nlu_service.extract_intent(message_body)
+    resultado_nlu = nlu_service.extract_intent(
+        message_body, contexto_previo=state.get("ultimo_mensaje_bot"))
 
     if resultado_nlu["intencion"] == "otro" and not resultado_nlu.get("fecha"):
         return mensaje_aclaracion
@@ -553,6 +555,18 @@ def _fallback_reinterpretar(phone_number: str, state: dict, message_body: str,
 # ---------------------------------------------------------------------------
 
 def handle_incoming_message(phone_number: str, message_body: str, profile_name: str | None = None) -> str:
+    """
+    Envoltura del orquestador: procesa el mensaje y, antes de devolver la
+    respuesta, la guarda como "último mensaje del bot" — el contexto que
+    permite interpretar respuestas cortas del paciente ("sí porfavor")
+    en el siguiente turno.
+    """
+    respuesta = _handle_incoming_message(phone_number, message_body, profile_name)
+    _get_state(phone_number)["ultimo_mensaje_bot"] = respuesta
+    return respuesta
+
+
+def _handle_incoming_message(phone_number: str, message_body: str, profile_name: str | None = None) -> str:
     """
     Punto de entrada único que main.py llama por cada mensaje entrante.
 
@@ -785,7 +799,8 @@ def handle_incoming_message(phone_number: str, message_body: str, profile_name: 
         # intención.
         # -------------------------------------------------------------
         primera = _es_primera_interaccion(state)
-        resultado_nlu = nlu_service.extract_intent(message_body)
+        resultado_nlu = nlu_service.extract_intent(
+            message_body, contexto_previo=state.get("ultimo_mensaje_bot"))
         return _despachar_intencion(
             phone_number, state, resultado_nlu, profile_name,
             es_primera_interaccion=primera, message_body=message_body,
