@@ -234,7 +234,8 @@ def build_confirmation_message(fecha_legible: str, hora: str, nombre_cliente: st
     return (
         f"{encabezado}\n\n"
         f"📅 {fecha_legible}\n"
-        f"🕐 {hora}\n\n"
+        f"🕐 {hora}\n"
+        f"{business_config.bloque_ubicacion()}\n\n"
         f"{business_config.despedida_confirmacion()}"
     )
 
