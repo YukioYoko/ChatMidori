@@ -109,6 +109,7 @@ def _estado_vacio() -> dict:
         "citas_encontradas": [],
         "evento_objetivo": None,
         "accion_pendiente": None,  # "cancelar" | "reprogramar", mientras se elige la cita
+        "modalidad": None,          # "virtual" si el paciente la pidió explícitamente
     }
 
 
@@ -470,7 +471,7 @@ def _procesar_solicitud_de_fecha(phone_number: str, state: dict, fecha_str: str 
 
 
 def _despachar_intencion(phone_number: str, state: dict, resultado_nlu: dict, profile_name: str | None,
-                          es_primera_interaccion: bool = False) -> str:
+                          es_primera_interaccion: bool = False, message_body: str = "") -> str:
     """
     Dado el resultado ya extraído por Claude, decide qué hacer. Se separa
     de la llamada a la API para poder reutilizarse tanto en una
@@ -482,6 +483,14 @@ def _despachar_intencion(phone_number: str, state: dict, resultado_nlu: dict, pr
 
     if resultado_nlu.get("nombre_cliente"):
         state["nombre_cliente"] = resultado_nlu["nombre_cliente"]
+
+    # Modalidad virtual: solo se marca si el paciente la pidió
+    # explícitamente (el NLU nunca la asume por su cuenta).
+    if resultado_nlu.get("modalidad") == "virtual":
+        state["modalidad"] = "virtual"
+
+    if intencion == "pregunta_informacion":
+        return nlu_service.answer_question(message_body)
 
     if intencion == "saludo":
         return whatsapp_client.build_greeting_message()
@@ -535,7 +544,8 @@ def _fallback_reinterpretar(phone_number: str, state: dict, message_body: str,
     _reset_state(phone_number)
     nuevo_state = _get_state(phone_number)
     nuevo_state["fecha"] = fecha_previa
-    return _despachar_intencion(phone_number, nuevo_state, resultado_nlu, profile_name)
+    return _despachar_intencion(phone_number, nuevo_state, resultado_nlu, profile_name,
+                                 message_body=message_body)
 
 
 # ---------------------------------------------------------------------------
@@ -629,6 +639,7 @@ def handle_incoming_message(phone_number: str, message_body: str, profile_name: 
 
             # ¿Este paciente debe depositar para confirmar? (lista negra,
             # o todos si la política de depósito obligatorio está activa)
+            es_virtual = state.get("modalidad") == "virtual"
             deposito = _requiere_deposito(phone_number)
             fecha_limite = None
             if deposito:
@@ -647,6 +658,7 @@ def handle_incoming_message(phone_number: str, message_body: str, profile_name: 
                     phone_number=phone_number,
                     description=descripcion,
                     payment_deadline=fecha_limite,
+                    virtual=es_virtual,
                 )
             except Exception as exc:
                 logger.error("Fallo al crear la cita para %s: %s", phone_number, exc)
@@ -670,7 +682,9 @@ def handle_incoming_message(phone_number: str, message_body: str, profile_name: 
                     fecha_limite_legible=fecha_limite_legible,
                 )
 
-            return whatsapp_client.build_confirmation_message(fecha_legible, hora, nombre)
+            meet_link = evento.get("hangoutLink") if es_virtual else None
+            return whatsapp_client.build_confirmation_message(fecha_legible, hora, nombre,
+                                                               meet_link=meet_link)
 
         if stage == "esperando_seleccion_cita":
             cita_elegida = _match_appointment_selection(message_body, state["citas_encontradas"])
@@ -774,7 +788,7 @@ def handle_incoming_message(phone_number: str, message_body: str, profile_name: 
         resultado_nlu = nlu_service.extract_intent(message_body)
         return _despachar_intencion(
             phone_number, state, resultado_nlu, profile_name,
-            es_primera_interaccion=primera,
+            es_primera_interaccion=primera, message_body=message_body,
         )
 
     except Exception as exc:

@@ -56,6 +56,7 @@ INTENCIONES_VALIDAS = {
     "cancelar_cita",
     "reprogramar_cita",
     "consultar_disponibilidad",
+    "pregunta_informacion",
     "saludo",
     "otro",
 }
@@ -67,6 +68,7 @@ FALLBACK_RESULT = {
     "fecha": None,
     "hora_preferida": None,
     "nombre_cliente": None,
+    "modalidad": None,
     "confianza": "baja",
 }
 
@@ -98,7 +100,7 @@ Hoy es: {hoy_texto} (zona horaria America/Mexico_City).
 
 Devuelve exactamente estas claves:
 {{
-  "intencion": una de ["agendar_cita", "cancelar_cita", "reprogramar_cita", "consultar_disponibilidad", "saludo", "otro"],
+  "intencion": una de ["agendar_cita", "cancelar_cita", "reprogramar_cita", "consultar_disponibilidad", "pregunta_informacion", "saludo", "otro"],
   "fecha": fecha en formato "YYYY-MM-DD" si el cliente la mencionó o se puede
            inferir (ej. "mañana", "el viernes", "el 15 de julio"), o null si
            no se menciona ninguna fecha,
@@ -107,6 +109,9 @@ Devuelve exactamente estas claves:
            o null si no se menciona,
   "nombre_cliente": el nombre del cliente si lo menciona explícitamente,
            o null si no aparece,
+  "modalidad": "virtual" ÚNICAMENTE si el paciente pide explícitamente que
+           su cita sea virtual, en línea, por videollamada o a distancia.
+           En cualquier otro caso: null. NUNCA asumas virtual por tu cuenta,
   "confianza": "alta", "media" o "baja", según qué tan seguro estás de
            haber entendido correctamente la intención y los datos.
 }}
@@ -130,6 +135,12 @@ natural del cliente, incluyendo errores de tipeo o acentos faltantes):
   inferir razonablemente del texto.
 
 Otras reglas importantes:
+- Usa "pregunta_informacion" cuando el paciente pregunta sobre el
+  consultorio o la doctora: servicios, especialidad, ubicación, horarios,
+  precios, citas virtuales, o cualquier duda informativa que no sea
+  agendar/cancelar/reprogramar. Ejemplos: "¿qué servicios manejan?",
+  "¿dónde están ubicados?", "¿me das información de la doctora?",
+  "¿atienden en línea?".
 - Si el mensaje es ambiguo o no tiene relación con agendar citas, usa
   intencion: "otro" y confianza: "baja".
 - Si el cliente solo saluda ("hola", "buenas tardes"), usa intencion: "saludo".
@@ -208,6 +219,76 @@ def extract_intent(user_message: str, today: date | None = None) -> dict:
         result.setdefault(key, FALLBACK_RESULT[key])
 
     return result
+
+
+# ---------------------------------------------------------------------------
+# RESPUESTA A PREGUNTAS INFORMATIVAS
+# ---------------------------------------------------------------------------
+
+_FALLBACK_ANSWER = (
+    "Esa información no la tengo a la mano en este momento. 🙏 Puedes "
+    "preguntar directamente al consultorio o, si gustas, te ayudo a "
+    "agendar una cita para resolver todas tus dudas con la doctora."
+)
+
+
+def answer_question(user_message: str) -> str:
+    """
+    Responde una pregunta informativa del paciente (servicios, ubicación,
+    horarios, información de la doctora, citas virtuales, etc.) usando
+    únicamente el contexto del consultorio definido en business_config.
+
+    Reglas duras que se le imponen al modelo:
+      - Solo información que esté en el contexto; si no la tiene, lo dice
+        e invita a preguntar directamente o a agendar.
+      - JAMÁS da consejo médico, diagnósticos ni opiniones clínicas.
+      - Respuestas breves, cálidas y en el tono del asistente.
+
+    Si la API falla, devuelve un mensaje de respaldo amable en vez de
+    lanzar una excepción.
+    """
+    if not user_message or not user_message.strip():
+        return _FALLBACK_ANSWER
+
+    system_prompt = f"""{business_config.TONE_INSTRUCTIONS}
+
+Tu tarea AHORA: responder la pregunta del paciente de forma breve
+(2-5 oraciones máximo), cálida y útil, usando ÚNICAMENTE la información
+del contexto del consultorio que aparece arriba.
+
+Reglas estrictas:
+- Si la respuesta NO está en el contexto (por ejemplo, precios que no
+  aparecen), dilo honestamente e invita a preguntar directamente al
+  consultorio o a agendar una cita. NUNCA inventes datos.
+- JAMÁS des consejo médico, diagnósticos ni opiniones sobre síntomas.
+  Si la pregunta es clínica, responde con empatía y sugiere agendar una
+  consulta para una valoración adecuada.
+- Si mencionas la ubicación, incluye este enlace de Google Maps:
+  {business_config.CONSULTORIO_MAPS_URL}
+- Cierra ofreciendo ayuda para agendar solo cuando sea natural, sin ser
+  insistente.
+- Responde SOLO con el texto del mensaje para el paciente. Sin JSON,
+  sin comillas, sin encabezados."""
+
+    try:
+        response = client.messages.create(
+            model=MODEL_NAME,
+            max_tokens=500,
+            system=system_prompt,
+            messages=[{"role": "user", "content": user_message}],
+        )
+    except anthropic.APIError as exc:
+        logger.error("Error de la API de Claude al responder pregunta: %s", exc)
+        return _FALLBACK_ANSWER
+    except Exception as exc:
+        logger.error("Error inesperado al responder pregunta: %s", exc)
+        return _FALLBACK_ANSWER
+
+    texto = "".join(
+        block.text for block in response.content if getattr(block, "type", None) == "text"
+    ).strip()
+
+    return texto or _FALLBACK_ANSWER
 
 
 # ---------------------------------------------------------------------------

@@ -78,10 +78,15 @@ Signos y síntomas por los que se recomienda consultar:
 - Antecedentes familiares de cáncer de mama.
 - Cambios detectados en mastografía o ultrasonido previos.
 
-Asesoría virtual:
-- Para pacientes fuera de Guadalajara, la Dra. Midori ofrece asesoría
-  virtual por WhatsApp (informativa; no sustituye una consulta
-  presencial ni un diagnóstico médico formal).
+Citas virtuales (videollamada):
+- La doctora ofrece consultas virtuales por videollamada (Google Meet)
+  para pacientes que no pueden asistir presencialmente o viven fuera de
+  Guadalajara.
+- Se agendan igual que las presenciales, en los mismos horarios; si el
+  paciente quiere modalidad virtual, solo debe pedirla al agendar y
+  recibirá el enlace de la videollamada en su confirmación.
+- La consulta virtual es informativa y de valoración; no sustituye los
+  estudios o procedimientos que requieren presencia física.
 
 Contacto directo (por si el paciente lo pide):
 - WhatsApp: 33 1008 6178
