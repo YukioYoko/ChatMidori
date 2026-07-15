@@ -87,14 +87,11 @@ def _build_system_prompt(today: date) -> str:
     dias_semana = ["lunes", "martes", "miércoles", "jueves", "viernes", "sábado", "domingo"]
     hoy_texto = f"{dias_semana[today.weekday()]} {today.isoformat()}"
 
-    return f"""{business_config.TONE_INSTRUCTIONS}
-
----
-
-Además de tu papel como asistente, tu tarea AHORA es actuar como motor
-de interpretación: lee el mensaje del cliente y devuelve ÚNICAMENTE un
-objeto JSON válido, sin texto adicional, sin explicaciones, sin backticks
-de markdown.
+    return f"""Eres el motor de interpretación de un chatbot de citas por WhatsApp.
+Tu ÚNICA tarea es leer el mensaje del cliente y devolver un objeto JSON
+válido. NO respondas al cliente, NO agregues texto antes ni después del
+JSON, NO uses backticks de markdown. Otra parte del sistema se encarga
+de responderle al cliente — tú solo clasificas.
 
 Hoy es: {hoy_texto} (zona horaria America/Mexico_City).
 
@@ -203,9 +200,17 @@ def extract_intent(user_message: str, today: date | None = None) -> dict:
 
     try:
         result = json.loads(raw_text)
-    except json.JSONDecodeError as exc:
-        logger.warning("Claude devolvió JSON inválido ('%s'): %s", raw_text, exc)
-        return dict(FALLBACK_RESULT)
+    except json.JSONDecodeError:
+        # El modelo a veces agrega texto después del JSON. Intentamos
+        # rescatar el PRIMER objeto JSON del texto con raw_decode, que
+        # ignora lo que venga después.
+        try:
+            inicio = raw_text.index("{")
+            result, _ = json.JSONDecoder().raw_decode(raw_text[inicio:])
+            logger.info("JSON rescatado de una respuesta con texto extra.")
+        except (ValueError, json.JSONDecodeError) as exc:
+            logger.warning("Claude devolvió JSON irrecuperable ('%s'): %s", raw_text[:200], exc)
+            return dict(FALLBACK_RESULT)
 
     # Validación defensiva: nos aseguramos de que la intención esté dentro
     # del set permitido y de que no falten claves, sin confiar ciegamente
