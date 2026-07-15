@@ -414,6 +414,7 @@ def _es_primera_interaccion(state: dict) -> bool:
         and state.get("fecha") is None
         and state.get("nombre_cliente") is None
         and not state.get("citas_encontradas")
+        and state.get("ultimo_mensaje_bot") is None
     )
 
 
@@ -436,15 +437,26 @@ def _procesar_solicitud_de_fecha(phone_number: str, state: dict, fecha_str: str 
             # Reutilizamos la fecha que ya estaba en la conversación.
             fecha_str = fecha_previa.isoformat()
         else:
-            pregunta_fecha = (
-                "¿Qué día te gustaría venir? Puedes decirme algo como "
-                "\"el 15 de julio\", \"el próximo miércoles\" o \"el sábado\". 🙂"
-            )
+            if state.get("modalidad") == "virtual":
+                pregunta_fecha = (
+                    "¡Perfecto, tu consulta será virtual por videollamada! 💻 "
+                    "¿Qué día te gustaría? Puedes decirme algo como "
+                    "\"el 15 de julio\", \"el próximo miércoles\" o \"el sábado\". 🙂"
+                )
+            else:
+                pregunta_fecha = (
+                    "¿Qué día te gustaría venir? Puedes decirme algo como "
+                    "\"el 15 de julio\", \"el próximo miércoles\" o \"el sábado\". 🙂"
+                )
             if es_primera_interaccion:
                 # Le anteponemos el agradecimiento para que la respuesta
                 # se sienta cordial, aun cuando el paciente entró directo
                 # pidiendo algo sin saludar antes.
                 return f"{business_config.agradecimiento_al_pedir()} Con gusto te ayudo.\n\n{pregunta_fecha}"
+            if state.get("modalidad") == "virtual":
+                # La variante virtual ya abre con su propio reconocimiento
+                # ("¡Perfecto...!"), no necesita el "Claro," delante.
+                return pregunta_fecha
             return f"Claro, {pregunta_fecha[0].lower() + pregunta_fecha[1:]}"
 
     try:
