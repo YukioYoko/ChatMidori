@@ -20,6 +20,24 @@ BUSINESS_NAME = "Consultorio Dra. Midori Muraoka"
 DOCTOR_NAME = "Dra. Midori Muraoka"
 ASSISTANT_ROLE = "asistente virtual del consultorio de la Dra. Midori Muraoka"
 
+# Dirección del consultorio y link directo a Google Maps.
+# Se incluyen en el mensaje de confirmación de cita para que el paciente
+# sepa exactamente a dónde llegar con un solo toque.
+CONSULTORIO_DIRECCION = "Blvd. Marcelino García Barragán 1176, Col. Del Periodista, Guadalajara, Jal."
+CONSULTORIO_MAPS_URL = (
+    "https://www.google.com/maps/search/?api=1&query="
+    "Blvd.+Marcelino+Garc%C3%ADa+Barrag%C3%A1n+1176%2C+Del+Periodista%2C"
+    "+44430+Guadalajara%2C+Jalisco"
+)
+
+
+def bloque_ubicacion() -> str:
+    """Bloque de ubicación reutilizable para mensajes al paciente."""
+    return (
+        f"📍 {CONSULTORIO_DIRECCION}\n"
+        f"🗺️ Cómo llegar: {CONSULTORIO_MAPS_URL}"
+    )
+
 # Contexto real del consultorio, extraído del sitio oficial
 # https://www.dramidorimuraoka.com/
 # Rellenar aquí es lo que le permite al asistente responder preguntas
