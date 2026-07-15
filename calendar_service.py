@@ -290,7 +290,8 @@ _PATRON_FECHA_LIMITE = re.compile(r"Pagar antes de:\s*(\d{4}-\d{2}-\d{2}T\d{2}:\
 
 def create_appointment(target_date: date, start_time_str: str, client_name: str,
                        phone_number: str, description: str | None = None,
-                       payment_deadline: datetime | None = None) -> dict:
+                       payment_deadline: datetime | None = None,
+                       virtual: bool = False) -> dict:
     """
     Inserta una nueva cita de 30 minutos en Google Calendar.
 
@@ -345,6 +346,8 @@ def create_appointment(target_date: date, start_time_str: str, client_name: str,
     lineas_descripcion.append("Agendado automáticamente vía WhatsApp Bot.")
 
     titulo = f"Cita - {client_name}"
+    if virtual:
+        titulo = f"Cita virtual - {client_name}"
     if payment_deadline is not None:
         titulo = f"{PENDING_PAYMENT_TAG} {titulo}"
 
@@ -355,9 +358,23 @@ def create_appointment(target_date: date, start_time_str: str, client_name: str,
         "end": {"dateTime": end_dt.isoformat(), "timeZone": TIMEZONE_NAME},
     }
 
+    # Para citas virtuales, pedimos a Google que genere automáticamente
+    # una videollamada de Google Meet asociada al evento. El link queda
+    # en created_event["hangoutLink"].
+    insert_kwargs = {"calendarId": CALENDAR_ID, "body": event_body}
+    if virtual:
+        import uuid
+        event_body["conferenceData"] = {
+            "createRequest": {
+                "requestId": str(uuid.uuid4()),
+                "conferenceSolutionKey": {"type": "hangoutsMeet"},
+            }
+        }
+        insert_kwargs["conferenceDataVersion"] = 1
+
     try:
         service = _get_service()
-        created_event = service.events().insert(calendarId=CALENDAR_ID, body=event_body).execute()
+        created_event = service.events().insert(**insert_kwargs).execute()
     except HttpError as error:
         logger.error("Error de la API de Google Calendar al crear la cita: %s", error)
         raise
