@@ -356,6 +356,7 @@ def build_payment_received_message(nombre: str | None = None) -> str:
     saludo = f"¡{nombre}, tu" if nombre else "¡Tu"
     return (
         f"✅ {saludo} pago fue recibido y tu cita quedó *confirmada*!\n\n"
+        f"{business_config.bloque_ubicacion()}\n\n"
         "Te esperamos en el consultorio. Un día antes te mandaremos un "
         "recordatorio. Si necesitas cambiar o cancelar tu cita, solo "
         "escríbenos. 🙂"
